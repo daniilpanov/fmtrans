@@ -85,7 +85,10 @@ void NodeState::addPeer(const Peer& peer) {
 void NodeState::removePeer(const std::string& id) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   peers_.erase(std::remove_if(peers_.begin(), peers_.end(),
-                              [&](const Peer& peer) { return peer.id == id; }),
+                              [&](const Peer& peer) {
+                                return peer.id == id || peer.name == id ||
+                                       peer.address() == id;
+                              }),
                peers_.end());
   save();
 }

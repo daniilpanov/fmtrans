@@ -39,3 +39,6 @@ add_executable(integration_tests tests/integration.cpp)
 target_link_libraries(integration_tests PRIVATE fmtrans_core)
 target_compile_definitions(integration_tests PRIVATE FMTRANSD_PATH="$<TARGET_FILE:fmtransd>")
 add_test(NAME integration COMMAND integration_tests)
+add_test(NAME cli COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_test.sh
+         $<TARGET_FILE:fmtrans>)
+set_tests_properties(cli PROPERTIES TIMEOUT 180)
