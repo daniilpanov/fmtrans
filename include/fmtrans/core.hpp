@@ -100,6 +100,7 @@ class DeviceClient : public IDevice {
 
   const std::string& host() const { return host_; }
   uint16_t port() const { return port_; }
+  const std::string& password() const { return password_; }
 
  private:
   net::HttpClient::Result raw(const std::string& method, const std::string& path,

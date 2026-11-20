@@ -83,7 +83,8 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request) {
     }
 
     if (method == "DELETE" && path.rfind("/api/v1/peers/", 0) == 0) {
-      const std::string id = path.substr(std::string("/api/v1/peers/").size());
+      const std::string id =
+          net::urlDecode(path.substr(std::string("/api/v1/peers/").size()));
       state_.removePeer(id);
       return net::HttpResponse::json(200, success().dump());
     }
