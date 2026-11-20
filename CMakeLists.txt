@@ -16,6 +16,9 @@ find_package(Threads REQUIRED)
 add_library(fmtrans_core STATIC
   src/sha1.cpp
   src/net.cpp
+  src/core.cpp
+  src/state.cpp
+  src/daemon.cpp
 )
 target_include_directories(fmtrans_core PUBLIC include third_party)
 target_link_libraries(fmtrans_core PUBLIC Threads::Threads)
@@ -31,3 +34,8 @@ enable_testing()
 add_executable(unit_tests tests/unit.cpp)
 target_link_libraries(unit_tests PRIVATE fmtrans_core)
 add_test(NAME unit COMMAND unit_tests)
+
+add_executable(integration_tests tests/integration.cpp)
+target_link_libraries(integration_tests PRIVATE fmtrans_core)
+target_compile_definitions(integration_tests PRIVATE FMTRANSD_PATH="$<TARGET_FILE:fmtransd>")
+add_test(NAME integration COMMAND integration_tests)
