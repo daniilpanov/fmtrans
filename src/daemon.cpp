@@ -24,13 +24,26 @@ json messagesToJson(const std::vector<Message>& messages) {
   return result;
 }
 
+// Only the local CLI may see stored peer passwords.
+bool loopback(const net::HttpRequest& request) {
+  return request.peer == "127.0.0.1" || request.peer == "::1";
+}
+
+bool knownPath(const std::string& path) {
+  return path == "/api/v1/info" || path == "/api/v1/peers" ||
+         path.rfind("/api/v1/peers/", 0) == 0 || path == "/api/v1/fs" ||
+         path == "/api/v1/fs/file" || path == "/api/v1/messages" ||
+         path == "/api/v1/relay";
+}
+
 }  // namespace
 
 Daemon::Daemon(LocalConfig config)
     : state_(config),
       server_(config.port,
               [this](const net::HttpRequest& request) { return handle(request); },
-              [this](int fd, const net::HttpRequest& request) { handleWs(fd, request); }) {}
+              [this](int fd, const net::HttpRequest& request) { handleWs(fd, request); },
+              config.host) {}
 
 net::HttpResponse Daemon::error(int status, const std::string& message) const {
   return net::HttpResponse::json(status, json({{"ok", false}, {"error", message}}).dump());
@@ -50,8 +63,9 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request) {
     }
 
     if (method == "GET" && path == "/api/v1/peers") {
+      const bool mask = !loopback(request);
       json peers = json::array();
-      for (const auto& peer : state_.peers()) peers.push_back(peer.toJson());
+      for (const auto& peer : state_.peers()) peers.push_back(peer.toJson(mask));
       return net::HttpResponse::json(200, success(peers).dump());
     }
 
@@ -79,7 +93,7 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request) {
         shared.source = "shared";
         state_.addPeer(shared);
       }
-      return net::HttpResponse::json(200, success(peer.toJson()).dump());
+      return net::HttpResponse::json(200, success(peer.toJson(!loopback(request))).dump());
     }
 
     if (method == "DELETE" && path.rfind("/api/v1/peers/", 0) == 0) {
@@ -105,7 +119,9 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request) {
 
     if (method == "POST" && path == "/api/v1/messages") {
       const json body = json::parse(request.body);
-      const uint64_t seq = state_.addMessage(state_.info().id, body.value("to", ""),
+      const std::string from = body.value("from", "");
+      const uint64_t seq = state_.addMessage(from.empty() ? state_.info().id : from,
+                                             body.value("to", ""),
                                              body.value("text", ""));
       return net::HttpResponse::json(200, success({{"seq", seq}}).dump());
     }
@@ -126,6 +142,7 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request) {
       return net::HttpResponse::json(200, success().dump());
     }
 
+    if (knownPath(path)) return error(405, "method not allowed");
     return error(404, "not found");
   } catch (const std::exception& exception) {
     return error(400, exception.what());
@@ -149,21 +166,31 @@ void Daemon::handleWs(int fd, const net::HttpRequest& request) {
       "Sec-WebSocket-Accept: " +
       net::ws::acceptKey(key) + "\r\n\r\n";
   if (!socket.sendAll(handshake)) return;
+  // Keep the live stream open while the client is idle.
+  socket.setTimeouts(0);
 
+  std::string buffer = request.extra;
   state_.subscribe(fd);
   while (true) {
-    const auto frame = net::ws::recvFrame(fd);
+    const auto frame = net::ws::recvFrame(fd, buffer);
     if (frame.close) break;
   }
   state_.unsubscribe(fd);
 }
 
-bool Daemon::run() {
+bool Daemon::bind() {
   state_.load();
   saveLocalConfig(state_.config());
   std::cout << "listening on " << state_.config().host << ":"
             << state_.config().port << std::endl;
-  return server_.start();
+  return server_.bind();
+}
+
+bool Daemon::serve() { return server_.serve(); }
+
+bool Daemon::run() {
+  if (!bind()) return false;
+  return serve();
 }
 
 }  // namespace fmtrans

@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <stdlib.h>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -54,9 +55,11 @@ uint16_t freePort() {
 }
 
 std::string tempHome(const std::string& tag) {
-  char pattern[] = "/tmp/fmtrans-test-XXXXXX";
-  char* dir = mkdtemp(pattern);
-  return std::string(dir) + "/" + tag;
+  const char* tmp = std::getenv("TMPDIR");
+  const std::string base = (tmp && *tmp) ? std::string(tmp) : std::string("/tmp");
+  std::string pattern = base + "/fmtrans-test-XXXXXX";
+  if (mkdtemp(pattern.data()) == nullptr) throw Error("cannot create temp directory");
+  return pattern + "/" + tag;
 }
 
 class DaemonProc {
@@ -123,6 +126,7 @@ class DaemonProc {
   }
 
   uint16_t port() const { return port_; }
+  std::string root() const { return home_ + "/data"; }
 
  private:
   std::string home_;
@@ -206,6 +210,8 @@ void testBrowseAndFiles() {
   DaemonProc node("files", port, "node-files");
   CHECK(node.start());
   CHECK(node.waitReady());
+  // Root is created on first start, before any file is written.
+  CHECK(node.client().browse("").empty());
 
   node.client().writeFile("docs/notes.txt", "privet");
   node.client().writeFile("docs/sub/other.bin", std::string("\0\x01\x02", 3));
@@ -227,6 +233,18 @@ void testBrowseAndFiles() {
   CHECK_THROWS(node.client().writeFile("../escape.txt", "bad"));
   CHECK_THROWS(node.client().browse("../../etc"));
   CHECK_THROWS(node.client().writeFile("/etc/escape.txt", "bad"));
+
+  // A symlink inside root must not allow reading outside of it.
+  const fs::path outside = fs::temp_directory_path() / "fmtrans-outside.txt";
+  {
+    std::ofstream output(outside);
+    output << "secret";
+  }
+  const fs::path link = fs::path(node.root()) / "link";
+  ::symlink(outside.c_str(), link.c_str());
+  CHECK_THROWS(node.client().readFile("link/fmtrans-outside.txt"));
+  ::unlink(link.c_str());
+  fs::remove(outside);
   std::cout << "  browse and files ok\n";
 }
 
@@ -268,6 +286,10 @@ void testMessagesAndWebSocket() {
   CHECK(messages[0].seq == 1 && messages[0].text == "live hello");
   CHECK(messages[1].to == "peer");
   CHECK(node.client().readMessages(1).size() == 1);
+
+  node.client().sendMessage("third", "", "tester");
+  const auto all = node.client().readMessages(0);
+  CHECK(all.back().from == "tester");
   std::cout << "  messages and websocket ok\n";
 }
 
@@ -286,7 +308,8 @@ void testRelayViaThirdDevice() {
   const Peer discovered = findPeer(a.client().peers(), c.info().id);
   CHECK(discovered.source == "shared");
 
-  a.client().relay(discovered, "via/relayed.txt", "through-b");
+  // A asks B (the third device) to write the file to C.
+  b.client().relay(c.describe(), "via/relayed.txt", "through-b");
   CHECK(c.client().readFile("via/relayed.txt") == "through-b");
   std::cout << "  relay via third device ok\n";
 }

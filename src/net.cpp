@@ -20,6 +20,9 @@
 namespace fmtrans::net {
 namespace {
 
+// Upper bound for a single request body (plan: limit request size).
+constexpr size_t kMaxBodyBytes = 64 * 1024 * 1024;
+
 std::string lower(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
     return static_cast<char>(std::tolower(c));
@@ -33,21 +36,6 @@ std::string trim(const std::string& value) {
   while (begin < end && std::isspace(static_cast<unsigned char>(value[begin]))) ++begin;
   while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1]))) --end;
   return value.substr(begin, end - begin);
-}
-
-bool readExact(int fd, char* dst, size_t length) {
-  size_t done = 0;
-  while (done < length) {
-    const ssize_t got = ::recv(fd, dst + done, length - done, MSG_NOSIGNAL);
-    if (got > 0) {
-      done += static_cast<size_t>(got);
-    } else if (got == 0) {
-      return false;
-    } else if (errno != EINTR) {
-      return false;
-    }
-  }
-  return true;
 }
 
 void sendFrame(int fd, int opcode, const std::string& payload) {
@@ -229,6 +217,7 @@ std::string HttpResponse::serialize() const {
       case 404: reasonText = "Not Found"; break;
       case 405: reasonText = "Method Not Allowed"; break;
       case 409: reasonText = "Conflict"; break;
+      case 413: reasonText = "Payload Too Large"; break;
       case 500: reasonText = "Internal Server Error"; break;
       default: reasonText = "Unknown";
     }
@@ -293,10 +282,6 @@ bool readHeaders(Socket& socket, std::string& buffer) {
 
 bool finishBody(Socket& socket, std::string& buffer, size_t headerEnd, size_t needed) {
   if (buffer.size() < headerEnd + 4) return false;
-  if (buffer.size() > headerEnd + 4 + needed) {
-    buffer.resize(headerEnd + 4 + needed);
-    return true;
-  }
   while (buffer.size() - (headerEnd + 4) < needed) {
     std::string chunk;
     if (!socket.recvSome(chunk)) return false;
@@ -333,8 +318,13 @@ std::optional<HttpRequest> readRequest(Socket& socket, int timeoutMs) {
 
   const auto length = contentLength(request.headers);
   if (!length) return std::nullopt;
+  if (*length > kMaxBodyBytes) {
+    request.tooLarge = true;
+    return request;
+  }
   if (!finishBody(socket, buffer, headerEnd, *length)) return std::nullopt;
-  request.body = buffer.substr(headerEnd + 4);
+  request.body = buffer.substr(headerEnd + 4, *length);
+  request.extra = buffer.substr(headerEnd + 4 + *length);
   return request;
 }
 
@@ -359,7 +349,7 @@ std::optional<HttpResponse> readResponse(Socket& socket, int timeoutMs) {
   const auto length = contentLength(response.headers);
   if (!length) return std::nullopt;
   if (!finishBody(socket, buffer, headerEnd, *length)) return std::nullopt;
-  response.body = buffer.substr(headerEnd + 4);
+  response.body = buffer.substr(headerEnd + 4, *length);
   return response;
 }
 
@@ -395,31 +385,43 @@ HttpClient::Result HttpClient::request(const std::string& method, const std::str
   return result;
 }
 
-HttpServer::HttpServer(uint16_t port, Handler handler, WsHandler wsHandler)
-    : port_(port), handler_(std::move(handler)), wsHandler_(std::move(wsHandler)) {}
+HttpServer::HttpServer(uint16_t port, Handler handler, WsHandler wsHandler,
+                       std::string host)
+    : port_(port), host_(std::move(host)), handler_(std::move(handler)),
+      wsHandler_(std::move(wsHandler)) {}
 
-bool HttpServer::start() {
-  listenFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-  if (listenFd_ < 0) return false;
-  int yes = 1;
-  ::setsockopt(listenFd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-  sockaddr_in address{};
-  address.sin_family = AF_INET;
-  address.sin_addr.s_addr = htonl(INADDR_ANY);
-  address.sin_port = htons(port_);
-  if (::bind(listenFd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-    ::close(listenFd_);
-    listenFd_ = -1;
+bool HttpServer::bind() {
+  addrinfo hints{};
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;
+  addrinfo* result = nullptr;
+  const std::string service = std::to_string(port_);
+  if (::getaddrinfo(host_.empty() ? nullptr : host_.c_str(), service.c_str(), &hints,
+                    &result) != 0) {
     return false;
   }
-  if (::listen(listenFd_, 128) != 0) {
-    ::close(listenFd_);
-    listenFd_ = -1;
-    return false;
+  bool bound = false;
+  for (addrinfo* it = result; it != nullptr; it = it->ai_next) {
+    const int fd = ::socket(it->ai_family, it->ai_socktype, it->ai_protocol);
+    if (fd < 0) continue;
+    int yes = 1;
+    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    if (::bind(fd, it->ai_addr, it->ai_addrlen) == 0 && ::listen(fd, 128) == 0) {
+      listenFd_ = fd;
+      bound = true;
+      break;
+    }
+    ::close(fd);
   }
+  ::freeaddrinfo(result);
+  if (!bound) return false;
   timeval tv{0, 200000};
   ::setsockopt(listenFd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  return true;
+}
 
+bool HttpServer::serve() {
   const Handler handler = handler_;
   const WsHandler wsHandler = wsHandler_;
   while (!stop_) {
@@ -430,10 +432,17 @@ bool HttpServer::start() {
       if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
       break;
     }
-    std::thread([handler, wsHandler, fd]() {
+    char peerBuf[INET_ADDRSTRLEN] = {0};
+    ::inet_ntop(AF_INET, &peer.sin_addr, peerBuf, sizeof(peerBuf));
+    std::thread([handler, wsHandler, fd, peerBuf]() {
       Socket socket(fd);
-      const auto request = readRequest(socket);
+      auto request = readRequest(socket);
       if (!request) return;
+      request->peer = peerBuf;
+      if (request->tooLarge) {
+        socket.sendAll(HttpResponse::text(413, "payload too large").serialize());
+        return;
+      }
       if (wsHandler && request->path == "/ws") {
         wsHandler(socket.release(), *request);
         return;
@@ -443,6 +452,11 @@ bool HttpServer::start() {
     }).detach();
   }
   return true;
+}
+
+bool HttpServer::start() {
+  if (!bind()) return false;
+  return serve();
 }
 
 void HttpServer::stop() {
@@ -464,59 +478,100 @@ void sendText(int fd, const std::string& text) { sendFrame(fd, 0x1, text); }
 
 void sendPing(int fd) { sendFrame(fd, 0x9, ""); }
 
+namespace {
+
+bool recvInto(int fd, std::string& buffer) {
+  char chunk[65536];
+  const ssize_t got = ::recv(fd, chunk, sizeof(chunk), MSG_NOSIGNAL);
+  if (got > 0) {
+    buffer.append(chunk, static_cast<size_t>(got));
+    return true;
+  }
+  if (got < 0 && errno == EINTR) return true;
+  return false;
+}
+
+}  // namespace
+
+Frame recvFrame(int fd, std::string& buffer) {
+  while (true) {
+    if (buffer.size() < 2) {
+      if (!recvInto(fd, buffer)) {
+        Frame frame;
+        frame.close = true;
+        return frame;
+      }
+      continue;
+    }
+    const auto* head = reinterpret_cast<const unsigned char*>(buffer.data());
+    const int opcode = head[0] & 0x0f;
+    const bool masked = (head[1] & 0x80) != 0;
+    uint64_t length = head[1] & 0x7f;
+    size_t header = 2;
+    if (length == 126) {
+      if (buffer.size() < 4) {
+        if (!recvInto(fd, buffer)) {
+          Frame frame;
+          frame.close = true;
+          return frame;
+        }
+        continue;
+      }
+      length = (static_cast<uint64_t>(static_cast<unsigned char>(buffer[2])) << 8) |
+              static_cast<unsigned char>(buffer[3]);
+      header = 4;
+    } else if (length == 127) {
+      if (buffer.size() < 10) {
+        if (!recvInto(fd, buffer)) {
+          Frame frame;
+          frame.close = true;
+          return frame;
+        }
+        continue;
+      }
+      length = 0;
+      for (size_t i = 0; i < 8; ++i) {
+        length = (length << 8) | static_cast<unsigned char>(buffer[2 + i]);
+      }
+      header = 10;
+    }
+    if (length > 64 * 1024 * 1024) {
+      Frame frame;
+      frame.close = true;
+      return frame;
+    }
+    const size_t maskBytes = masked ? 4 : 0;
+    const size_t total = header + maskBytes + static_cast<size_t>(length);
+    if (buffer.size() < total) {
+      if (!recvInto(fd, buffer)) {
+        Frame frame;
+        frame.close = true;
+        return frame;
+      }
+      continue;
+    }
+    Frame frame;
+    frame.opcode = opcode;
+    frame.payload.assign(buffer.substr(header + maskBytes, static_cast<size_t>(length)));
+    if (masked) {
+      for (size_t i = 0; i < frame.payload.size(); ++i) {
+        frame.payload[i] =
+            static_cast<char>(frame.payload[i] ^ buffer[header + (i % 4)]);
+      }
+    }
+    buffer.erase(0, total);
+    if (opcode == 0x9) {
+      sendFrame(fd, 0xA, frame.payload);
+      continue;
+    }
+    if (opcode == 0x8) frame.close = true;
+    return frame;
+  }
+}
+
 Frame recvFrame(int fd) {
-  Frame frame;
-  unsigned char head[2];
-  if (!readExact(fd, reinterpret_cast<char*>(head), 2)) {
-    frame.close = true;
-    return frame;
-  }
-  const bool fin = (head[0] & 0x80) != 0;
-  (void)fin;
-  frame.opcode = head[0] & 0x0f;
-  const bool masked = (head[1] & 0x80) != 0;
-  uint64_t length = head[1] & 0x7f;
-  if (length == 126) {
-    unsigned char ext[2];
-    if (!readExact(fd, reinterpret_cast<char*>(ext), 2)) {
-      frame.close = true;
-      return frame;
-    }
-    length = (static_cast<uint64_t>(ext[0]) << 8) | ext[1];
-  } else if (length == 127) {
-    unsigned char ext[8];
-    if (!readExact(fd, reinterpret_cast<char*>(ext), 8)) {
-      frame.close = true;
-      return frame;
-    }
-    length = 0;
-    for (unsigned char byte : ext) length = (length << 8) | byte;
-  }
-  if (length > 64 * 1024 * 1024) {
-    frame.close = true;
-    return frame;
-  }
-  unsigned char mask[4] = {0, 0, 0, 0};
-  if (masked && !readExact(fd, reinterpret_cast<char*>(mask), 4)) {
-    frame.close = true;
-    return frame;
-  }
-  frame.payload.resize(static_cast<size_t>(length));
-  if (length > 0 && !readExact(fd, &frame.payload[0], static_cast<size_t>(length))) {
-    frame.close = true;
-    return frame;
-  }
-  if (masked) {
-    for (size_t i = 0; i < frame.payload.size(); ++i) {
-      frame.payload[i] = static_cast<char>(frame.payload[i] ^ mask[i % 4]);
-    }
-  }
-  if (frame.opcode == 0x9) {
-    sendFrame(fd, 0xA, frame.payload);
-    return recvFrame(fd);
-  }
-  if (frame.opcode == 0x8) frame.close = true;
-  return frame;
+  std::string buffer;
+  return recvFrame(fd, buffer);
 }
 
 }  // namespace ws

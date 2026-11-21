@@ -1,5 +1,7 @@
 #include "fmtrans/core.hpp"
 
+#include <sys/stat.h>
+
 #include <chrono>
 #include <cctype>
 #include <cstdlib>
@@ -32,11 +34,6 @@ std::string encode(const std::string& value) {
   return out;
 }
 
-void writeFileText(const std::string& path, const std::string& content) {
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output << content;
-}
-
 }  // namespace
 
 json DeviceInfo::toJson() const {
@@ -54,9 +51,14 @@ DeviceInfo DeviceInfo::fromJson(const json& value) {
   return info;
 }
 
-json Peer::toJson() const {
-  return {{"id", id}, {"name", name}, {"host", host}, {"port", port},
-          {"password", password}, {"public", publicAccess}, {"source", source}};
+json Peer::toJson(bool maskPassword) const {
+  return {{"id", id},
+          {"name", name},
+          {"host", host},
+          {"port", port},
+          {"password", maskPassword && !password.empty() ? "***" : password},
+          {"public", publicAccess},
+          {"source", source}};
 }
 
 Peer Peer::fromJson(const json& value) {
@@ -102,6 +104,7 @@ std::string homeDir() {
   const char* env = std::getenv("FMTRANS_HOME");
   std::string path = env ? env : std::string(std::getenv("HOME") ? std::getenv("HOME") : ".") + "/.fmtrans";
   std::filesystem::create_directories(path);
+  ::chmod(path.c_str(), 0700);
   return path;
 }
 
@@ -129,7 +132,14 @@ void saveLocalConfig(const LocalConfig& config) {
   const json value = {{"host", config.host}, {"port", config.port},
                       {"name", config.name}, {"password", config.password},
                       {"root", config.root}};
-  writeFileText(homeDir() + "/local.conf", value.dump(2));
+  const std::string path = homeDir() + "/local.conf";
+  const std::string temporary = path + ".tmp";
+  {
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    output << value.dump(2);
+  }
+  ::chmod(temporary.c_str(), 0600);
+  std::filesystem::rename(temporary, path);
 }
 
 std::string makeId() {
@@ -212,8 +222,15 @@ std::vector<FileEntry> DeviceClient::browse(const std::string& path) const {
 
 std::string DeviceClient::readFile(const std::string& path) const {
   const auto result = raw("GET", "/fs/file?path=" + encode(path));
-  if (!result.ok || result.response.status != 200) {
-    throw Error("read file failed: " + path);
+  if (!result.ok) throw Error("read file failed: " + path);
+  if (result.response.status != 200) {
+    std::string message = "read file failed: HTTP " + std::to_string(result.response.status);
+    try {
+      const json error = json::parse(result.response.body);
+      if (!error.value("ok", true)) message = error.value("error", message);
+    } catch (const std::exception&) {
+    }
+    throw Error(message);
   }
   return result.response.body;
 }
@@ -226,13 +243,14 @@ void DeviceClient::writeFile(const std::string& path, const std::string& data) {
   try {
     response = json::parse(result.response.body);
   } catch (const std::exception&) {
-    throw Error("invalid write response");
+    throw Error("write file failed: HTTP " + std::to_string(result.response.status));
   }
   if (!response.value("ok", false)) throw Error(response.value("error", "write failed"));
 }
 
-void DeviceClient::sendMessage(const std::string& text, const std::string& to) {
-  call("POST", "/messages", {{"text", text}, {"to", to}});
+void DeviceClient::sendMessage(const std::string& text, const std::string& to,
+                               const std::string& from) {
+  call("POST", "/messages", {{"text", text}, {"to", to}, {"from", from}});
 }
 
 std::vector<Message> DeviceClient::readMessages(uint64_t since) const {

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 CLI="${1:-./build/fmtrans}"
-ROOT="$(mktemp -d /tmp/fmtrans-cli-XXXXXX)"
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/fmtrans-cli-XXXXXX")"
 trap 'for h in "$ROOT"/a "$ROOT"/b "$ROOT"/c "$ROOT"/d; do FMTRANS_HOME="$h" "$CLI" daemon stop >/dev/null 2>&1 || true; done; rm -rf "$ROOT"' EXIT
 
 free_port() {

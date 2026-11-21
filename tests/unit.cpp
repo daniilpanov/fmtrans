@@ -1,3 +1,4 @@
+#include "fmtrans/core.hpp"
 #include "fmtrans/net.hpp"
 #include "fmtrans/sha1.hpp"
 
@@ -102,6 +103,37 @@ void testWebSocketFrames() {
   ::close(pair[1]);
 }
 
+void testWebSocketBuffered() {
+  int pair[2];
+  CHECK(::socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+  net::ws::sendText(pair[0], "one");
+  net::ws::sendText(pair[0], "two");
+  std::string buffer;
+  const auto first = net::ws::recvFrame(pair[1], buffer);
+  CHECK(first.opcode == 0x1 && first.payload == "one" && !first.close);
+  const auto second = net::ws::recvFrame(pair[1], buffer);
+  CHECK(second.opcode == 0x1 && second.payload == "two" && !second.close);
+  ::close(pair[0]);
+  const auto closed = net::ws::recvFrame(pair[1], buffer);
+  CHECK(closed.close);
+  ::close(pair[1]);
+}
+
+void testPeerMasking() {
+  Peer peer;
+  peer.id = "id";
+  peer.name = "name";
+  peer.host = "host";
+  peer.port = 9100;
+  peer.password = "secret";
+  peer.publicAccess = false;
+  CHECK(peer.toJson(true).at("password") == "***");
+  CHECK(peer.toJson().at("password") == "secret");
+  Peer publicPeer;
+  publicPeer.password.clear();
+  CHECK(publicPeer.toJson(true).at("password") == "");
+}
+
 }  // namespace
 
 int main() {
@@ -110,6 +142,8 @@ int main() {
   testSerialize();
   testHttpRoundtrip();
   testWebSocketFrames();
+  testWebSocketBuffered();
+  testPeerMasking();
   if (failures == 0) {
     std::cout << "unit: all tests passed\n";
     return 0;

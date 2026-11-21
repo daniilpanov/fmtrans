@@ -39,7 +39,8 @@ struct Peer {
   // "direct" - connected explicitly, "shared" - discovered from another peer.
   std::string source = "direct";
 
-  json toJson() const;
+  // maskPassword replaces a non-empty password with "***" for remote callers.
+  json toJson(bool maskPassword = false) const;
   static Peer fromJson(const json& value);
   std::string address() const { return host + ":" + std::to_string(port); }
 };
@@ -76,7 +77,8 @@ class IDevice {
   virtual std::vector<FileEntry> browse(const std::string& path) const = 0;
   virtual std::string readFile(const std::string& path) const = 0;
   virtual void writeFile(const std::string& path, const std::string& data) = 0;
-  virtual void sendMessage(const std::string& text, const std::string& to) = 0;
+  virtual void sendMessage(const std::string& text, const std::string& to,
+                           const std::string& from = "") = 0;
   virtual std::vector<Message> readMessages(uint64_t since) const = 0;
   virtual void relay(const Peer& target, const std::string& path,
                      const std::string& data) = 0;
@@ -93,7 +95,8 @@ class DeviceClient : public IDevice {
   std::vector<FileEntry> browse(const std::string& path) const override;
   std::string readFile(const std::string& path) const override;
   void writeFile(const std::string& path, const std::string& data) override;
-  void sendMessage(const std::string& text, const std::string& to) override;
+  void sendMessage(const std::string& text, const std::string& to,
+                   const std::string& from = "") override;
   std::vector<Message> readMessages(uint64_t since) const override;
   void relay(const Peer& target, const std::string& path,
              const std::string& data) override;
