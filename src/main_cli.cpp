@@ -4,14 +4,17 @@
 #include "fmtrans/net.hpp"
 
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <sstream>
 
@@ -27,8 +30,9 @@ void printHelp() {
 Использование:
   fmtrans status                       состояние локального устройства
   fmtrans listen --port N --name N     запустить демон в текущем терминале
-                 [--password P] [--root DIR]
+                 [--password P] [--root DIR] [--host H]
   fmtrans daemon start|stop|status     управление фоновым демоном
+                 [--port N] [--name N] [--password P] [--root DIR] [--host H]
   fmtrans devices                      список известных устройств
   fmtrans connect HOST:PORT            подключить устройство
                  [--password P] [--name N]
@@ -198,10 +202,13 @@ void watchEvents(const Target& target) {
   if (response.find("101 Switching Protocols") == std::string::npos) {
     throw Error("не удалось открыть ленту событий");
   }
-  socket.setTimeouts(1000);
-  std::cout << "Лента событий открыта. Ctrl+C для выхода.\n";
+  const size_t headerEnd = response.find("\r\n\r\n") + 4;
+  std::string buffer = response.substr(headerEnd);
+  // Stay connected while idle; the stream ends only when the peer closes it.
+  socket.setTimeouts(0);
+  std::cout << "Лента событий открыта. Ctrl+C для выхода.\n" << std::flush;
   while (true) {
-    const auto frame = net::ws::recvFrame(socket.get());
+    const auto frame = net::ws::recvFrame(socket.get(), buffer);
     if (frame.close) break;
     try {
       const json event = json::parse(frame.payload);
@@ -209,9 +216,10 @@ void watchEvents(const Target& target) {
       if (type == "message") {
         const json message = event.at("message");
         std::cout << "Сообщение от " << message.value("from", "?") << ": "
-                  << message.value("text", "") << "\n";
+                  << message.value("text", "") << "\n"
+                  << std::flush;
       } else {
-        std::cout << "Событие: " << event.dump() << "\n";
+        std::cout << "Событие: " << event.dump() << "\n" << std::flush;
       }
     } catch (const std::exception&) {
       // Ignore malformed frames.
@@ -228,9 +236,16 @@ int readPid() {
   return pid;
 }
 
-bool alive(int pid) {
+bool isDaemonProcess(int pid) {
   if (pid <= 0) return false;
-  return ::kill(pid, 0) == 0;
+  if (::kill(pid, 0) != 0) return false;
+  std::ifstream input("/proc/" + std::to_string(pid) + "/cmdline", std::ios::binary);
+  if (!input) return true;
+  const std::string cmdline((std::istreambuf_iterator<char>(input)),
+                            std::istreambuf_iterator<char>());
+  // The background daemon keeps the CLI command line ("fmtrans daemon start ...").
+  return cmdline.find("fmtrans") != std::string::npos &&
+         cmdline.find("daemon") != std::string::npos;
 }
 
 }  // namespace
@@ -255,13 +270,25 @@ int main(int argc, char** argv) {
     if (command == "daemon") {
       const std::string action = arg(1);
       if (action == "start") {
-        if (alive(readPid())) {
+        if (isDaemonProcess(readPid())) {
           std::cout << "Демон уже запущен.\n";
           return 0;
         }
         const LocalConfig config = configFromArgs(args);
+        int pipeFd[2];
+        if (::pipe(pipeFd) != 0) {
+          std::cerr << "Не удалось создать канал запуска.\n";
+          return 1;
+        }
         const pid_t pid = fork();
+        if (pid < 0) {
+          ::close(pipeFd[0]);
+          ::close(pipeFd[1]);
+          std::cerr << "Не удалось запустить процесс.\n";
+          return 1;
+        }
         if (pid == 0) {
+          ::close(pipeFd[0]);
           setsid();
           const int devnull = ::open("/dev/null", O_RDWR);
           ::dup2(devnull, STDIN_FILENO);
@@ -269,26 +296,43 @@ int main(int argc, char** argv) {
           ::dup2(devnull, STDERR_FILENO);
           ::close(devnull);
           Daemon daemon(config);
-          daemon.run();
-          _exit(0);
+          if (!daemon.bind()) _exit(1);
+          const char ready = '1';
+          const ssize_t written = ::write(pipeFd[1], &ready, 1);
+          ::close(pipeFd[1]);
+          if (written != 1) _exit(1);
+          _exit(daemon.serve() ? 0 : 1);
+        }
+        ::close(pipeFd[1]);
+        bool started = false;
+        for (int waited = 0; waited < 5000; waited += 50) {
+          pollfd pfd{pipeFd[0], POLLIN, 0};
+          const int ready = ::poll(&pfd, 1, 50);
+          if (ready > 0) {
+            char reply = 0;
+            const ssize_t got = ::read(pipeFd[0], &reply, 1);
+            if (got == 1 && reply == '1') started = true;
+            break;
+          }
+          if (ready < 0 && errno != EINTR) break;
+        }
+        ::close(pipeFd[0]);
+        if (!started) {
+          ::kill(pid, SIGTERM);
+          ::waitpid(pid, nullptr, 0);
+          ::unlink(pidPath().c_str());
+          std::cerr << "Демон не смог запуститься (порт занят или конфигурация неверна).\n";
+          return 1;
         }
         std::ofstream output(pidPath(), std::ios::trunc);
         output << pid;
-        for (int attempt = 0; attempt < 100; ++attempt) {
-          try {
-            DeviceClient(config.host, config.port, config.password).info();
-            std::cout << "Демон запущен (pid " << pid << ").\n";
-            return 0;
-          } catch (const std::exception&) {
-            ::usleep(50000);
-          }
-        }
-        std::cerr << "Демон не ответил вовремя.\n";
-        return 1;
+        std::cout << "Демон запущен (pid " << pid << ").\n";
+        return 0;
       }
       if (action == "stop") {
         const int pid = readPid();
-        if (!alive(pid)) {
+        if (!isDaemonProcess(pid)) {
+          ::unlink(pidPath().c_str());
           std::cout << "Демон не запущен.\n";
           return 0;
         }
@@ -300,8 +344,9 @@ int main(int argc, char** argv) {
       }
       if (action == "status") {
         const int pid = readPid();
-        std::cout << (alive(pid) ? "Демон запущен (pid " + std::to_string(pid) + ")."
-                                 : "Демон не запущен.")
+        std::cout << (isDaemonProcess(pid)
+                          ? "Демон запущен (pid " + std::to_string(pid) + ")."
+                          : "Демон не запущен.")
                   << "\n";
         return 0;
       }
@@ -392,7 +437,7 @@ int main(int argc, char** argv) {
       const Target target = resolveTarget(arg(1), config, local);
       std::string text = arg(2);
       for (size_t i = 3; i < args.positional.size(); ++i) text += " " + args.positional[i];
-      target.device->sendMessage(text, args.get("to"));
+      target.device->sendMessage(text, args.get("to"), local.info().id);
       std::cout << "Сообщение отправлено.\n";
       return 0;
     }

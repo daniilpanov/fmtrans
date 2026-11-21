@@ -1,5 +1,8 @@
 #include "fmtrans/state.hpp"
 
+#include <fcntl.h>
+#include <sys/stat.h>
+
 #include <algorithm>
 #include <chrono>
 #include <ctime>
@@ -17,6 +20,7 @@ NodeState::NodeState(LocalConfig config) : config_(std::move(config)) {
 }
 
 void NodeState::load() {
+  fs::create_directories(config_.root);
   const std::string path = homeDir() + "/state.json";
   std::ifstream input(path);
   if (!input) {
@@ -28,7 +32,7 @@ void NodeState::load() {
     input >> value;
     info_.id = value.value("id", info_.id);
     info_.name = value.value("name", info_.name);
-    info_.publicAccess = info_.id.empty() || config_.password.empty();
+    info_.publicAccess = config_.password.empty();
     nextSeq_ = value.value("nextSeq", static_cast<uint64_t>(1));
     for (const auto& item : value.value("peers", json::array())) {
       peers_.push_back(Peer::fromJson(item));
@@ -39,7 +43,6 @@ void NodeState::load() {
   } catch (const std::exception&) {
     // Corrupted state starts clean but keeps the generated identity.
   }
-  fs::create_directories(config_.root);
 }
 
 void NodeState::save() const {
@@ -51,12 +54,25 @@ void NodeState::save() const {
   const json value = {{"id", info_.id}, {"name", info_.name},
                       {"peers", peers}, {"messages", messages},
                       {"nextSeq", nextSeq_}};
-  std::ofstream output(homeDir() + "/state.json", std::ios::trunc);
-  output << value.dump(2);
+  const std::string path = homeDir() + "/state.json";
+  const std::string temporary = path + ".tmp";
+  {
+    std::ofstream output(temporary, std::ios::trunc);
+    output << value.dump(2);
+  }
+  ::chmod(temporary.c_str(), 0600);
+  fs::rename(temporary, path);
 }
 
 bool NodeState::authorized(const std::string& token) const {
-  return config_.password.empty() || token == config_.password;
+  if (config_.password.empty()) return true;
+  const std::string& expected = config_.password;
+  if (token.size() != expected.size()) return false;
+  unsigned char diff = 0;
+  for (size_t i = 0; i < expected.size(); ++i) {
+    diff |= static_cast<unsigned char>(token[i]) ^ static_cast<unsigned char>(expected[i]);
+  }
+  return diff == 0;
 }
 
 std::vector<Peer> NodeState::peers() const {
@@ -128,15 +144,19 @@ uint64_t NodeState::addMessage(const std::string& from, const std::string& to,
 }
 
 fs::path NodeState::resolve(const std::string& relative) const {
-  const fs::path root = fs::absolute(config_.root).lexically_normal();
+  const fs::path root = fs::weakly_canonical(fs::absolute(config_.root));
   fs::path target = relative.empty() ? root : fs::path(relative);
   if (!target.is_absolute()) target = root / target;
   target = target.lexically_normal();
-  const fs::path child = target.lexically_relative(root);
-  if (child.empty() || child.begin() == child.end() || *child.begin() == "..") {
-    throw Error("path outside root: " + relative);
-  }
-  return target;
+  const auto inside = [](const fs::path& path, const fs::path& base) {
+    const fs::path child = path.lexically_relative(base);
+    return !child.empty() && !child.begin()->empty() && *child.begin() != "..";
+  };
+  if (!inside(target, root)) throw Error("path outside root: " + relative);
+  // Resolve symlinks too: a link inside root must not point outside of it.
+  const fs::path canonical = fs::weakly_canonical(target);
+  if (!inside(canonical, root)) throw Error("path outside root: " + relative);
+  return canonical;
 }
 
 std::vector<FileEntry> NodeState::browse(const std::string& relative) const {
@@ -205,7 +225,10 @@ void NodeState::broadcast(const json& event) {
     targets = subscribers_;
   }
   const std::string payload = event.dump();
-  for (int fd : targets) net::ws::sendText(fd, payload);
+  for (int fd : targets) {
+    if (::fcntl(fd, F_GETFD) == -1) continue;
+    net::ws::sendText(fd, payload);
+  }
 }
 
 }  // namespace fmtrans

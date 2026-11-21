@@ -38,6 +38,11 @@ struct HttpRequest {
   std::map<std::string, std::string> headers;
   std::map<std::string, std::string> query;
   std::string body;
+  // Bytes that arrived after the request body (e.g. an early WebSocket frame).
+  std::string extra;
+  // Client address, used to keep sensitive fields for loopback callers only.
+  std::string peer;
+  bool tooLarge = false;
 
   std::string header(const std::string& key) const;
 };
@@ -80,14 +85,20 @@ class HttpServer {
   using Handler = std::function<HttpResponse(const HttpRequest&)>;
   using WsHandler = std::function<void(int fd, const HttpRequest&)>;
 
-  HttpServer(uint16_t port, Handler handler, WsHandler wsHandler = {});
+  HttpServer(uint16_t port, Handler handler, WsHandler wsHandler = {},
+             std::string host = "0.0.0.0");
 
+  // Creates and binds the listening socket.
+  bool bind();
+  // Accept loop; blocks until stop().
+  bool serve();
   bool start();
   void stop();
   uint16_t port() const { return port_; }
 
  private:
   uint16_t port_;
+  std::string host_;
   Handler handler_;
   WsHandler wsHandler_;
   int listenFd_ = -1;
@@ -107,6 +118,8 @@ struct Frame {
   bool close = false;
 };
 
+// Reads one frame. The buffer keeps bytes that belong to the next frame.
+Frame recvFrame(int fd, std::string& buffer);
 Frame recvFrame(int fd);
 
 }  // namespace ws

@@ -10,6 +10,10 @@ class Daemon {
  public:
   explicit Daemon(LocalConfig config);
 
+  // Loads state and binds the listening socket without serving yet.
+  bool bind();
+  // Accept loop; blocks until stop().
+  bool serve();
   // Blocks until the server stops.
   bool run();
   NodeState& state() { return state_; }
