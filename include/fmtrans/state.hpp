@@ -32,8 +32,8 @@ class NodeState {
                       const std::string& text);
 
   std::vector<FileEntry> browse(const std::string& relative) const;
-  std::string readFile(const std::string& relative) const;
-  void writeFile(const std::string& relative, const std::string& data);
+  Bytes readFile(const std::string& relative) const;
+  void writeFile(const std::string& relative, const Bytes& data);
 
   void subscribe(int fd);
   void unsubscribe(int fd);

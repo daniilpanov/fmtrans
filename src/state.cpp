@@ -190,20 +190,23 @@ std::vector<FileEntry> NodeState::browse(const std::string& relative) const {
   return entries;
 }
 
-std::string NodeState::readFile(const std::string& relative) const {
+Bytes NodeState::readFile(const std::string& relative) const {
   const fs::path target = resolve(relative);
   if (!fs::exists(target) || !fs::is_regular_file(target)) {
     throw Error("not a file: " + relative);
   }
   std::ifstream input(target, std::ios::binary);
-  return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+  const std::string text((std::istreambuf_iterator<char>(input)),
+                         std::istreambuf_iterator<char>());
+  return toBytes(text);
 }
 
-void NodeState::writeFile(const std::string& relative, const std::string& data) {
+void NodeState::writeFile(const std::string& relative, const Bytes& data) {
   const fs::path target = resolve(relative);
   fs::create_directories(target.parent_path());
   std::ofstream output(target, std::ios::binary | std::ios::trunc);
-  output.write(data.data(), static_cast<std::streamsize>(data.size()));
+  output.write(reinterpret_cast<const char*>(data.data()),
+               static_cast<std::streamsize>(data.size()));
   if (!output) throw Error("write failed: " + relative);
 }
 

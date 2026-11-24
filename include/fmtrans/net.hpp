@@ -5,6 +5,23 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
+
+namespace fmtrans {
+
+// The single payload type used on the wire and for file content.
+using Bytes = std::vector<std::uint8_t>;
+
+inline Bytes toBytes(const std::string& text) {
+  return Bytes(text.begin(), text.end());
+}
+
+// Only for text payloads (JSON, HTTP headers); never for binary file data.
+inline std::string toString(const Bytes& bytes) {
+  return std::string(bytes.begin(), bytes.end());
+}
+
+}  // namespace fmtrans
 
 namespace fmtrans::net {
 
@@ -24,8 +41,9 @@ class Socket {
   int release();
   bool connectTo(const std::string& host, uint16_t port, int timeoutMs);
   bool setTimeouts(int timeoutMs);
+  bool sendAll(const Bytes& data);
   bool sendAll(const std::string& data);
-  bool recvSome(std::string& out, size_t maxBytes = 65536);
+  bool recvSome(Bytes& out, size_t maxBytes = 65536);
 
  private:
   int fd_ = -1;
@@ -37,9 +55,9 @@ struct HttpRequest {
   std::string version;
   std::map<std::string, std::string> headers;
   std::map<std::string, std::string> query;
-  std::string body;
+  Bytes body;
   // Bytes that arrived after the request body (e.g. an early WebSocket frame).
-  std::string extra;
+  Bytes extra;
   // Client address, used to keep sensitive fields for loopback callers only.
   std::string peer;
   bool tooLarge = false;
@@ -51,13 +69,13 @@ struct HttpResponse {
   int status = 200;
   std::string reason;
   std::map<std::string, std::string> headers;
-  std::string body;
+  Bytes body;
 
   static HttpResponse json(int status, const std::string& body);
   static HttpResponse text(int status, const std::string& body);
-  static HttpResponse bytes(int status, const std::string& body,
+  static HttpResponse bytes(int status, const Bytes& body,
                             const std::string& mime = "application/octet-stream");
-  std::string serialize() const;
+  Bytes serialize() const;
 };
 
 // Reads one full request (headers plus Content-Length body) from a socket.
@@ -77,7 +95,7 @@ class HttpClient {
   Result request(const std::string& method, const std::string& host, uint16_t port,
                  const std::string& path,
                  const std::map<std::string, std::string>& headers = {},
-                 const std::string& body = "", int timeoutMs = 5000);
+                 const Bytes& body = {}, int timeoutMs = 5000);
 };
 
 class HttpServer {
@@ -114,12 +132,12 @@ void sendPing(int fd);
 
 struct Frame {
   int opcode = -1;
-  std::string payload;
+  Bytes payload;
   bool close = false;
 };
 
 // Reads one frame. The buffer keeps bytes that belong to the next frame.
-Frame recvFrame(int fd, std::string& buffer);
+Frame recvFrame(int fd, Bytes& buffer);
 Frame recvFrame(int fd);
 
 }  // namespace ws

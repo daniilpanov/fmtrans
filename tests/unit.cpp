@@ -58,7 +58,7 @@ void testQuery() {
 
 void testSerialize() {
   const auto response = net::HttpResponse::json(200, "{\"ok\":true}");
-  const std::string raw = response.serialize();
+  const std::string raw = toString(response.serialize());
   CHECK(raw.find("HTTP/1.1 200 OK\r\n") == 0);
   CHECK(raw.find("Content-Length: 11\r\n") != std::string::npos);
   CHECK(raw.find("application/json") != std::string::npos);
@@ -68,8 +68,9 @@ void testHttpRoundtrip() {
   const uint16_t port = freePort();
   net::HttpServer server(port, [](const net::HttpRequest& request) {
     if (request.path == "/echo") {
-      return net::HttpResponse::text(200, request.method + ":" + request.body +
-                                              ":" + request.header("x-test"));
+      return net::HttpResponse::text(200,
+                                     request.method + ":" + toString(request.body) +
+                                         ":" + request.header("x-test"));
     }
     return net::HttpResponse::json(404, "{\"ok\":false}");
   });
@@ -81,10 +82,10 @@ void testHttpRoundtrip() {
   while (!ready) std::this_thread::yield();
   net::HttpClient client;
   const auto result = client.request("POST", "127.0.0.1", port, "/echo",
-                                     {{"X-Test", "value"}}, "payload");
+                                     {{"X-Test", "value"}}, toBytes("payload"));
   CHECK(result.ok);
   CHECK(result.response.status == 200);
-  CHECK(result.response.body == "POST:payload:value");
+  CHECK(toString(result.response.body) == "POST:payload:value");
   const auto missing = client.request("GET", "127.0.0.1", port, "/missing");
   CHECK(missing.ok && missing.response.status == 404);
   server.stop();
@@ -97,7 +98,7 @@ void testWebSocketFrames() {
   net::ws::sendText(pair[0], "privet");
   const auto frame = net::ws::recvFrame(pair[1]);
   CHECK(frame.opcode == 0x1);
-  CHECK(frame.payload == "privet");
+  CHECK(toString(frame.payload) == "privet");
   CHECK(!frame.close);
   ::close(pair[0]);
   ::close(pair[1]);
@@ -108,11 +109,13 @@ void testWebSocketBuffered() {
   CHECK(::socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
   net::ws::sendText(pair[0], "one");
   net::ws::sendText(pair[0], "two");
-  std::string buffer;
+  Bytes buffer;
   const auto first = net::ws::recvFrame(pair[1], buffer);
-  CHECK(first.opcode == 0x1 && first.payload == "one" && !first.close);
+  CHECK(first.opcode == 0x1 && toString(first.payload) == "one" &&
+        !first.close);
   const auto second = net::ws::recvFrame(pair[1], buffer);
-  CHECK(second.opcode == 0x1 && second.payload == "two" && !second.close);
+  CHECK(second.opcode == 0x1 && toString(second.payload) == "two" &&
+        !second.close);
   ::close(pair[0]);
   const auto closed = net::ws::recvFrame(pair[1], buffer);
   CHECK(closed.close);

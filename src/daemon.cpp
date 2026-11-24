@@ -70,7 +70,7 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request) {
     }
 
     if (method == "POST" && path == "/api/v1/peers") {
-      Peer peer = Peer::fromJson(json::parse(request.body));
+      Peer peer = Peer::fromJson(json::parse(toString(request.body)));
       if (peer.host.empty() || peer.port == 0) {
         return error(400, "host and port are required");
       }
@@ -118,7 +118,7 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request) {
     }
 
     if (method == "POST" && path == "/api/v1/messages") {
-      const json body = json::parse(request.body);
+      const json body = json::parse(toString(request.body));
       const std::string from = body.value("from", "");
       const uint64_t seq = state_.addMessage(from.empty() ? state_.info().id : from,
                                              body.value("to", ""),
@@ -169,7 +169,7 @@ void Daemon::handleWs(int fd, const net::HttpRequest& request) {
   // Keep the live stream open while the client is idle.
   socket.setTimeouts(0);
 
-  std::string buffer = request.extra;
+  Bytes buffer = request.extra;
   state_.subscribe(fd);
   while (true) {
     const auto frame = net::ws::recvFrame(fd, buffer);

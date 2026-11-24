@@ -165,7 +165,7 @@ DeviceClient::DeviceClient(std::string host, uint16_t port, std::string password
     : host_(std::move(host)), port_(port), password_(std::move(password)) {}
 
 net::HttpClient::Result DeviceClient::raw(const std::string& method, const std::string& path,
-                                          const std::string& body,
+                                          const Bytes& body,
                                           const std::string& contentType) const {
   std::map<std::string, std::string> headers;
   if (!password_.empty()) headers["X-Fmtrans-Auth"] = password_;
@@ -175,12 +175,12 @@ net::HttpClient::Result DeviceClient::raw(const std::string& method, const std::
 
 json DeviceClient::call(const std::string& method, const std::string& path,
                         const json& body) const {
-  const std::string payload = body.is_null() ? "" : body.dump();
+  const Bytes payload = body.is_null() ? Bytes{} : toBytes(body.dump());
   const auto result = raw(method, path, payload, "application/json");
   if (!result.ok) throw Error("unreachable: " + host_ + ":" + std::to_string(port_));
   json response;
   try {
-    response = json::parse(result.response.body);
+    response = json::parse(toString(result.response.body));
   } catch (const std::exception&) {
     throw Error("invalid response from " + addressHost());
   }
@@ -220,13 +220,13 @@ std::vector<FileEntry> DeviceClient::browse(const std::string& path) const {
   return result;
 }
 
-std::string DeviceClient::readFile(const std::string& path) const {
+Bytes DeviceClient::readFile(const std::string& path) const {
   const auto result = raw("GET", "/fs/file?path=" + encode(path));
   if (!result.ok) throw Error("read file failed: " + path);
   if (result.response.status != 200) {
     std::string message = "read file failed: HTTP " + std::to_string(result.response.status);
     try {
-      const json error = json::parse(result.response.body);
+      const json error = json::parse(toString(result.response.body));
       if (!error.value("ok", true)) message = error.value("error", message);
     } catch (const std::exception&) {
     }
@@ -235,13 +235,13 @@ std::string DeviceClient::readFile(const std::string& path) const {
   return result.response.body;
 }
 
-void DeviceClient::writeFile(const std::string& path, const std::string& data) {
+void DeviceClient::writeFile(const std::string& path, const Bytes& data) {
   const auto result = raw("PUT", "/fs/file?path=" + encode(path), data,
                           "application/octet-stream");
   if (!result.ok) throw Error("write file failed: " + path);
   json response;
   try {
-    response = json::parse(result.response.body);
+    response = json::parse(toString(result.response.body));
   } catch (const std::exception&) {
     throw Error("write file failed: HTTP " + std::to_string(result.response.status));
   }
@@ -262,14 +262,14 @@ std::vector<Message> DeviceClient::readMessages(uint64_t since) const {
 }
 
 void DeviceClient::relay(const Peer& target, const std::string& path,
-                         const std::string& data) {
+                         const Bytes& data) {
   const std::string query = "?target=" + encode(target.toJson().dump()) +
                             "&path=" + encode(path);
   const auto result = raw("POST", "/relay" + query, data, "application/octet-stream");
   if (!result.ok) throw Error("relay failed");
   json response;
   try {
-    response = json::parse(result.response.body);
+    response = json::parse(toString(result.response.body));
   } catch (const std::exception&) {
     throw Error("invalid relay response");
   }
