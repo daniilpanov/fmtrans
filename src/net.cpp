@@ -38,24 +38,25 @@ std::string trim(const std::string& value) {
   return value.substr(begin, end - begin);
 }
 
-void sendFrame(int fd, int opcode, const std::string& payload) {
-  std::string frame;
-  frame.push_back(static_cast<char>(0x80 | opcode));  // FIN + opcode
+void sendFrame(int fd, int opcode, const Bytes& payload) {
+  Bytes frame;
+  frame.push_back(static_cast<std::uint8_t>(0x80 | opcode));  // FIN + opcode
   const size_t len = payload.size();
   if (len < 126) {
-    frame.push_back(static_cast<char>(len));
+    frame.push_back(static_cast<std::uint8_t>(len));
   } else if (len < 65536) {
-    frame.push_back(static_cast<char>(126));
-    frame.push_back(static_cast<char>((len >> 8) & 0xff));
-    frame.push_back(static_cast<char>(len & 0xff));
+    frame.push_back(static_cast<std::uint8_t>(126));
+    frame.push_back(static_cast<std::uint8_t>((len >> 8) & 0xff));
+    frame.push_back(static_cast<std::uint8_t>(len & 0xff));
   } else {
-    frame.push_back(static_cast<char>(127));
+    frame.push_back(static_cast<std::uint8_t>(127));
     for (int i = 7; i >= 0; --i) {
-      frame.push_back(static_cast<char>((static_cast<uint64_t>(len) >> (i * 8)) & 0xff));
+      frame.push_back(
+          static_cast<std::uint8_t>((static_cast<uint64_t>(len) >> (i * 8)) & 0xff));
     }
   }
-  frame += payload;
-  ::send(fd, frame.data(), frame.size(), MSG_NOSIGNAL);
+  frame.insert(frame.end(), payload.begin(), payload.end());
+  ::send(fd, reinterpret_cast<const char*>(frame.data()), frame.size(), MSG_NOSIGNAL);
 }
 
 }  // namespace
@@ -176,10 +177,12 @@ bool Socket::connectTo(const std::string& host, uint16_t port, int timeoutMs) {
   return connected;
 }
 
-bool Socket::sendAll(const std::string& data) {
+bool Socket::sendAll(const Bytes& data) {
   size_t done = 0;
   while (done < data.size()) {
-    const ssize_t sent = ::send(fd_, data.data() + done, data.size() - done, MSG_NOSIGNAL);
+    const ssize_t sent =
+        ::send(fd_, reinterpret_cast<const char*>(data.data()) + done,
+               data.size() - done, MSG_NOSIGNAL);
     if (sent > 0) {
       done += static_cast<size_t>(sent);
     } else if (sent == 0 || errno != EINTR) {
@@ -189,12 +192,14 @@ bool Socket::sendAll(const std::string& data) {
   return true;
 }
 
-bool Socket::recvSome(std::string& out, size_t maxBytes) {
-  char buffer[65536];
-  const size_t want = std::min(maxBytes, sizeof(buffer));
-  const ssize_t got = ::recv(fd_, buffer, want, MSG_NOSIGNAL);
+bool Socket::sendAll(const std::string& data) { return sendAll(toBytes(data)); }
+
+bool Socket::recvSome(Bytes& out, size_t maxBytes) {
+  std::vector<std::uint8_t> buffer(std::min(maxBytes, static_cast<size_t>(65536)));
+  const ssize_t got = ::recv(fd_, reinterpret_cast<char*>(buffer.data()), buffer.size(),
+                             MSG_NOSIGNAL);
   if (got > 0) {
-    out.append(buffer, static_cast<size_t>(got));
+    out.insert(out.end(), buffer.begin(), buffer.begin() + got);
     return true;
   }
   return false;
@@ -205,7 +210,7 @@ std::string HttpRequest::header(const std::string& key) const {
   return it == headers.end() ? std::string() : it->second;
 }
 
-std::string HttpResponse::serialize() const {
+Bytes HttpResponse::serialize() const {
   std::string reasonText = reason;
   if (reasonText.empty()) {
     switch (status) {
@@ -222,24 +227,25 @@ std::string HttpResponse::serialize() const {
       default: reasonText = "Unknown";
     }
   }
-  std::ostringstream out;
-  out << "HTTP/1.1 " << status << " " << reasonText << "\r\n";
+  std::ostringstream head;
+  head << "HTTP/1.1 " << status << " " << reasonText << "\r\n";
   if (headers.find("content-type") == headers.end()) {
-    out << "Content-Type: text/plain; charset=utf-8\r\n";
+    head << "Content-Type: text/plain; charset=utf-8\r\n";
   }
   for (const auto& [key, value] : headers) {
-    out << key << ": " << value << "\r\n";
+    head << key << ": " << value << "\r\n";
   }
-  out << "Content-Length: " << body.size() << "\r\n";
-  out << "Connection: close\r\n\r\n";
-  out << body;
-  return out.str();
+  head << "Content-Length: " << body.size() << "\r\n";
+  head << "Connection: close\r\n\r\n";
+  Bytes result = toBytes(head.str());
+  result.insert(result.end(), body.begin(), body.end());
+  return result;
 }
 
 HttpResponse HttpResponse::json(int status, const std::string& body) {
   HttpResponse response;
   response.status = status;
-  response.body = body;
+  response.body = toBytes(body);
   response.headers["content-type"] = "application/json; charset=utf-8";
   return response;
 }
@@ -247,12 +253,12 @@ HttpResponse HttpResponse::json(int status, const std::string& body) {
 HttpResponse HttpResponse::text(int status, const std::string& body) {
   HttpResponse response;
   response.status = status;
-  response.body = body;
+  response.body = toBytes(body);
   response.headers["content-type"] = "text/plain; charset=utf-8";
   return response;
 }
 
-HttpResponse HttpResponse::bytes(int status, const std::string& body, const std::string& mime) {
+HttpResponse HttpResponse::bytes(int status, const Bytes& body, const std::string& mime) {
   HttpResponse response;
   response.status = status;
   response.body = body;
@@ -272,20 +278,27 @@ std::optional<size_t> contentLength(const std::map<std::string, std::string>& he
   }
 }
 
-bool readHeaders(Socket& socket, std::string& buffer) {
-  while (buffer.find("\r\n\r\n") == std::string::npos) {
+size_t headerEnd(const Bytes& buffer) {
+  static const std::uint8_t needle[] = {'\r', '\n', '\r', '\n'};
+  const auto it = std::search(buffer.begin(), buffer.end(), needle, needle + 4);
+  return it == buffer.end() ? std::string::npos
+                            : static_cast<size_t>(it - buffer.begin());
+}
+
+bool readHeaders(Socket& socket, Bytes& buffer) {
+  while (headerEnd(buffer) == std::string::npos) {
     if (!socket.recvSome(buffer)) return false;
     if (buffer.size() > 16 * 1024 * 1024) return false;
   }
   return true;
 }
 
-bool finishBody(Socket& socket, std::string& buffer, size_t headerEnd, size_t needed) {
-  if (buffer.size() < headerEnd + 4) return false;
-  while (buffer.size() - (headerEnd + 4) < needed) {
-    std::string chunk;
+bool finishBody(Socket& socket, Bytes& buffer, size_t headEnd, size_t needed) {
+  if (buffer.size() < headEnd + 4) return false;
+  while (buffer.size() - (headEnd + 4) < needed) {
+    Bytes chunk;
     if (!socket.recvSome(chunk)) return false;
-    buffer += chunk;
+    buffer.insert(buffer.end(), chunk.begin(), chunk.end());
   }
   return true;
 }
@@ -294,10 +307,11 @@ bool finishBody(Socket& socket, std::string& buffer, size_t headerEnd, size_t ne
 
 std::optional<HttpRequest> readRequest(Socket& socket, int timeoutMs) {
   socket.setTimeouts(timeoutMs);
-  std::string buffer;
+  Bytes buffer;
   if (!readHeaders(socket, buffer)) return std::nullopt;
-  const size_t headerEnd = buffer.find("\r\n\r\n");
-  std::stringstream head(buffer.substr(0, headerEnd));
+  const size_t headEnd = headerEnd(buffer);
+  const std::string headText = toString(Bytes(buffer.begin(), buffer.begin() + headEnd));
+  std::stringstream head(headText);
 
   HttpRequest request;
   if (!(head >> request.method >> request.path >> request.version)) return std::nullopt;
@@ -322,18 +336,21 @@ std::optional<HttpRequest> readRequest(Socket& socket, int timeoutMs) {
     request.tooLarge = true;
     return request;
   }
-  if (!finishBody(socket, buffer, headerEnd, *length)) return std::nullopt;
-  request.body = buffer.substr(headerEnd + 4, *length);
-  request.extra = buffer.substr(headerEnd + 4 + *length);
+  if (!finishBody(socket, buffer, headEnd, *length)) return std::nullopt;
+  const size_t bodyBegin = headEnd + 4;
+  request.body = Bytes(buffer.begin() + bodyBegin,
+                       buffer.begin() + bodyBegin + *length);
+  request.extra = Bytes(buffer.begin() + bodyBegin + *length, buffer.end());
   return request;
 }
 
 std::optional<HttpResponse> readResponse(Socket& socket, int timeoutMs) {
   socket.setTimeouts(timeoutMs);
-  std::string buffer;
+  Bytes buffer;
   if (!readHeaders(socket, buffer)) return std::nullopt;
-  const size_t headerEnd = buffer.find("\r\n\r\n");
-  std::stringstream head(buffer.substr(0, headerEnd));
+  const size_t headEnd = headerEnd(buffer);
+  const std::string headText = toString(Bytes(buffer.begin(), buffer.begin() + headEnd));
+  std::stringstream head(headText);
 
   HttpResponse response;
   std::string version;
@@ -348,29 +365,32 @@ std::optional<HttpResponse> readResponse(Socket& socket, int timeoutMs) {
 
   const auto length = contentLength(response.headers);
   if (!length) return std::nullopt;
-  if (!finishBody(socket, buffer, headerEnd, *length)) return std::nullopt;
-  response.body = buffer.substr(headerEnd + 4, *length);
+  if (!finishBody(socket, buffer, headEnd, *length)) return std::nullopt;
+  const size_t bodyBegin = headEnd + 4;
+  response.body = Bytes(buffer.begin() + bodyBegin,
+                        buffer.begin() + bodyBegin + *length);
   return response;
 }
 
 HttpClient::Result HttpClient::request(const std::string& method, const std::string& host,
                                        uint16_t port, const std::string& path,
                                        const std::map<std::string, std::string>& headers,
-                                       const std::string& body, int timeoutMs) {
+                                       const Bytes& body, int timeoutMs) {
   Result result;
   Socket socket;
   if (!socket.connectTo(host, port, timeoutMs)) {
     result.error = "connect failed: " + host + ":" + std::to_string(port);
     return result;
   }
-  std::string raw = method + " " + path + " HTTP/1.1\r\n";
-  raw += "Host: " + host + ":" + std::to_string(port) + "\r\n";
+  std::string head = method + " " + path + " HTTP/1.1\r\n";
+  head += "Host: " + host + ":" + std::to_string(port) + "\r\n";
   for (const auto& [key, value] : headers) {
-    raw += key + ": " + value + "\r\n";
+    head += key + ": " + value + "\r\n";
   }
-  raw += "Content-Length: " + std::to_string(body.size()) + "\r\n";
-  raw += "Connection: close\r\n\r\n";
-  raw += body;
+  head += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+  head += "Connection: close\r\n\r\n";
+  Bytes raw = toBytes(head);
+  raw.insert(raw.end(), body.begin(), body.end());
   if (!socket.sendAll(raw)) {
     result.error = "send failed";
     return result;
@@ -474,17 +494,18 @@ std::string acceptKey(const std::string& clientKey) {
   return base64Encode(sha1Raw(clientKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"));
 }
 
-void sendText(int fd, const std::string& text) { sendFrame(fd, 0x1, text); }
+void sendText(int fd, const std::string& text) { sendFrame(fd, 0x1, toBytes(text)); }
 
-void sendPing(int fd) { sendFrame(fd, 0x9, ""); }
+void sendPing(int fd) { sendFrame(fd, 0x9, Bytes{}); }
 
 namespace {
 
-bool recvInto(int fd, std::string& buffer) {
-  char chunk[65536];
-  const ssize_t got = ::recv(fd, chunk, sizeof(chunk), MSG_NOSIGNAL);
+bool recvInto(int fd, Bytes& buffer) {
+  std::vector<std::uint8_t> chunk(65536);
+  const ssize_t got = ::recv(fd, reinterpret_cast<char*>(chunk.data()), chunk.size(),
+                             MSG_NOSIGNAL);
   if (got > 0) {
-    buffer.append(chunk, static_cast<size_t>(got));
+    buffer.insert(buffer.end(), chunk.begin(), chunk.begin() + got);
     return true;
   }
   if (got < 0 && errno == EINTR) return true;
@@ -493,7 +514,7 @@ bool recvInto(int fd, std::string& buffer) {
 
 }  // namespace
 
-Frame recvFrame(int fd, std::string& buffer) {
+Frame recvFrame(int fd, Bytes& buffer) {
   while (true) {
     if (buffer.size() < 2) {
       if (!recvInto(fd, buffer)) {
@@ -552,14 +573,16 @@ Frame recvFrame(int fd, std::string& buffer) {
     }
     Frame frame;
     frame.opcode = opcode;
-    frame.payload.assign(buffer.substr(header + maskBytes, static_cast<size_t>(length)));
+    const size_t payloadBegin = header + maskBytes;
+    frame.payload.assign(buffer.begin() + payloadBegin,
+                         buffer.begin() + payloadBegin + static_cast<size_t>(length));
     if (masked) {
       for (size_t i = 0; i < frame.payload.size(); ++i) {
-        frame.payload[i] =
-            static_cast<char>(frame.payload[i] ^ buffer[header + (i % 4)]);
+        frame.payload[i] = static_cast<std::uint8_t>(frame.payload[i] ^
+                                                      buffer[header + (i % 4)]);
       }
     }
-    buffer.erase(0, total);
+    buffer.erase(buffer.begin(), buffer.begin() + total);
     if (opcode == 0x9) {
       sendFrame(fd, 0xA, frame.payload);
       continue;
@@ -570,7 +593,7 @@ Frame recvFrame(int fd, std::string& buffer) {
 }
 
 Frame recvFrame(int fd) {
-  std::string buffer;
+  Bytes buffer;
   return recvFrame(fd, buffer);
 }
 

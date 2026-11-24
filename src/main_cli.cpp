@@ -129,8 +129,9 @@ void putRecursive(IDevice& device, const fs::path& localPath, const std::string&
     return;
   }
   std::ifstream input(localPath, std::ios::binary);
-  const std::string data{std::istreambuf_iterator<char>(input),
+  const std::string text{std::istreambuf_iterator<char>(input),
                          std::istreambuf_iterator<char>()};
+  const Bytes data = toBytes(text);
   device.writeFile(remotePath, data);
   std::cout << "Отправлено: " << remotePath << " (" << data.size() << " байт)\n";
 }
@@ -141,10 +142,11 @@ void getRecursive(IDevice& device, const std::string& remotePath,
   try {
     entries = device.browse(remotePath);
   } catch (const std::exception&) {
-    const std::string data = device.readFile(remotePath);
+    const Bytes data = device.readFile(remotePath);
     fs::create_directories(localPath.parent_path());
     std::ofstream output(localPath, std::ios::binary | std::ios::trunc);
-    output.write(data.data(), static_cast<std::streamsize>(data.size()));
+    output.write(reinterpret_cast<const char*>(data.data()),
+                 static_cast<std::streamsize>(data.size()));
     std::cout << "Получено: " << localPath.string() << " (" << data.size() << " байт)\n";
     return;
   }
@@ -165,8 +167,9 @@ void relayRecursive(IDevice& via, const Peer& target, const fs::path& localPath,
     return;
   }
   std::ifstream input(localPath, std::ios::binary);
-  const std::string data{std::istreambuf_iterator<char>(input),
+  const std::string text{std::istreambuf_iterator<char>(input),
                          std::istreambuf_iterator<char>()};
+  const Bytes data = toBytes(text);
   via.relay(target, remotePath, data);
   std::cout << "Передано через третье устройство: " << remotePath << "\n";
 }
@@ -195,15 +198,18 @@ void watchEvents(const Target& target) {
   }
   request += "\r\n";
   if (!socket.sendAll(request)) throw Error("не удалось отправить запрос");
-  std::string response;
-  while (response.find("\r\n\r\n") == std::string::npos) {
+  Bytes response;
+  while (true) {
     if (!socket.recvSome(response)) throw Error("нет ответа устройства");
+    const std::string head = toString(response);
+    if (head.find("\r\n\r\n") != std::string::npos) break;
   }
-  if (response.find("101 Switching Protocols") == std::string::npos) {
+  const std::string head = toString(response);
+  if (head.find("101 Switching Protocols") == std::string::npos) {
     throw Error("не удалось открыть ленту событий");
   }
-  const size_t headerEnd = response.find("\r\n\r\n") + 4;
-  std::string buffer = response.substr(headerEnd);
+  const size_t headerEnd = head.find("\r\n\r\n") + 4;
+  Bytes buffer(response.begin() + headerEnd, response.end());
   // Stay connected while idle; the stream ends only when the peer closes it.
   socket.setTimeouts(0);
   std::cout << "Лента событий открыта. Ctrl+C для выхода.\n" << std::flush;
@@ -211,7 +217,7 @@ void watchEvents(const Target& target) {
     const auto frame = net::ws::recvFrame(socket.get(), buffer);
     if (frame.close) break;
     try {
-      const json event = json::parse(frame.payload);
+      const json event = json::parse(toString(frame.payload));
       const std::string type = event.value("type", "");
       if (type == "message") {
         const json message = event.at("message");

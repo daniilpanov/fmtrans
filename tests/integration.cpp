@@ -213,9 +213,9 @@ void testBrowseAndFiles() {
   // Root is created on first start, before any file is written.
   CHECK(node.client().browse("").empty());
 
-  node.client().writeFile("docs/notes.txt", "privet");
-  node.client().writeFile("docs/sub/other.bin", std::string("\0\x01\x02", 3));
-  CHECK(node.client().readFile("docs/notes.txt") == "privet");
+  node.client().writeFile("docs/notes.txt", toBytes("privet"));
+  node.client().writeFile("docs/sub/other.bin", Bytes{0, 1, 2});
+  CHECK(toString(node.client().readFile("docs/notes.txt")) == "privet");
 
   const auto root = node.client().browse("");
   CHECK(root.size() == 1);
@@ -230,9 +230,9 @@ void testBrowseAndFiles() {
   CHECK(sub.size() == 1);
   CHECK(sub[0].name == "other.bin" && sub[0].size == 3);
 
-  CHECK_THROWS(node.client().writeFile("../escape.txt", "bad"));
+  CHECK_THROWS(node.client().writeFile("../escape.txt", toBytes("bad")));
   CHECK_THROWS(node.client().browse("../../etc"));
-  CHECK_THROWS(node.client().writeFile("/etc/escape.txt", "bad"));
+  CHECK_THROWS(node.client().writeFile("/etc/escape.txt", toBytes("bad")));
 
   // A symlink inside root must not allow reading outside of it.
   const fs::path outside = fs::temp_directory_path() / "fmtrans-outside.txt";
@@ -264,18 +264,20 @@ void testMessagesAndWebSocket() {
       "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
       "Sec-WebSocket-Version: 13\r\n\r\n";
   CHECK(socket.sendAll(handshake));
-  std::string response;
-  while (response.find("\r\n\r\n") == std::string::npos) {
+  Bytes response;
+  while (true) {
     CHECK(socket.recvSome(response));
+    const std::string head = toString(response);
+    if (head.find("\r\n\r\n") != std::string::npos) break;
   }
-  CHECK(response.find("101 Switching Protocols") != std::string::npos);
+  CHECK(toString(response).find("101 Switching Protocols") != std::string::npos);
   socket.setTimeouts(3000);
 
   node.client().sendMessage("live hello", "");
   const auto frame = net::ws::recvFrame(socket.get());
   CHECK(frame.opcode == 1);
   if (frame.opcode == 1) {
-    const json event = json::parse(frame.payload);
+    const json event = json::parse(toString(frame.payload));
     CHECK(event.at("type") == "message");
     CHECK(event.at("message").at("text") == "live hello");
   }
@@ -309,8 +311,8 @@ void testRelayViaThirdDevice() {
   CHECK(discovered.source == "shared");
 
   // A asks B (the third device) to write the file to C.
-  b.client().relay(c.describe(), "via/relayed.txt", "through-b");
-  CHECK(c.client().readFile("via/relayed.txt") == "through-b");
+  b.client().relay(c.describe(), "via/relayed.txt", toBytes("through-b"));
+  CHECK(toString(c.client().readFile("via/relayed.txt")) == "through-b");
   std::cout << "  relay via third device ok\n";
 }
 
