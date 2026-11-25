@@ -392,16 +392,6 @@ int main(int argc, char** argv) {
       peer.source = "direct";
       local.addPeer(peer);
       const DeviceInfo info = DeviceClient(peer.host, peer.port, peer.password).info();
-      // Register the local device on the remote device so the connection is
-      // bidirectional: the remote device also knows about us.
-      Peer localPeer;
-      localPeer.id = info.id;
-      localPeer.name = info.name;
-      localPeer.host = config.host;
-      localPeer.port = config.port;
-      localPeer.password = config.password;
-      localPeer.source = "direct";
-      DeviceClient(peer.host, peer.port, peer.password).addPeer(localPeer);
       std::cout << "Подключено: " << info.name << " (" << address << ")\n";
       return 0;
     }

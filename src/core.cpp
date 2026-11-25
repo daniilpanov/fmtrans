@@ -72,7 +72,7 @@ Peer Peer::fromJson(const json& value) {
   peer.host = value.value("host", "");
   peer.port = static_cast<uint16_t>(value.value("port", 0));
   peer.password = value.value("password", "");
-  peer.publicAccess = value.value("public", peer.password.empty());
+  peer.publicAccess = value.value("public", false);
   peer.source = value.value("source", "direct");
   return peer;
 }
