@@ -26,6 +26,14 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local text="$1" needle="$2" label="$3"
+  if [[ "$text" == *"$needle"* ]]; then
+    echo "FAIL $label: did not expect '$needle' in: $text" >&2
+    exit 1
+  fi
+}
+
 export FMTRANS_HOME="$ROOT/a"
 STATUS="$("$CLI" status)"
 assert_contains "$STATUS" "alpha" "status name"
@@ -39,8 +47,8 @@ export FMTRANS_HOME="$ROOT/a"
 export FMTRANS_HOME="$ROOT/a"
 DEVICES="$("$CLI" devices)"
 assert_contains "$DEVICES" "beta" "devices direct"
-assert_contains "$DEVICES" "gamma" "devices shared"
-assert_contains "$DEVICES" "шеринг" "devices source"
+# REVERTME: auto-sharing disabled, gamma must NOT appear via sharing.
+assert_not_contains "$DEVICES" "gamma" "devices no shared"
 
 printf 'privet cli' > "$ROOT/source.txt"
 "$CLI" put "127.0.0.1:$PB" "$ROOT/source.txt" "cli/file.txt" >/dev/null

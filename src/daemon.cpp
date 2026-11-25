@@ -116,16 +116,20 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request,
         state_.setCallbackInProgress(false);
       }
 
-      // Share the remote peer's public, directly-connected devices (one hop only).
-      for (const Peer& candidate : probe.peers()) {
-        if (!candidate.publicAccess || candidate.source != "direct") continue;
-        if (candidate.id == state_.info().id) continue;
-        if (candidate.host == state_.config().host && candidate.port == state_.config().port) {
-          continue;
+      // REVERTME: temporarily disable auto-sharing to prevent self-connection.
+      // Re-enable after single source of truth is implemented.
+      if (false) {
+        // Share the remote peer's public, directly-connected devices (one hop only).
+        for (const Peer& candidate : probe.peers()) {
+          if (!candidate.publicAccess || candidate.source != "direct") continue;
+          if (candidate.id == state_.info().id) continue;
+          if (candidate.host == state_.config().host && candidate.port == state_.config().port) {
+            continue;
+          }
+          Peer shared = candidate;
+          shared.source = "shared";
+          state_.addPeer(shared);
         }
-        Peer shared = candidate;
-        shared.source = "shared";
-        state_.addPeer(shared);
       }
       return net::HttpResponse::json(200, success(peer.toJson(!loopback(request))).dump());
     }
