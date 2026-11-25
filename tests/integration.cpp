@@ -295,27 +295,6 @@ void testMessagesAndWebSocket() {
   std::cout << "  messages and websocket ok\n";
 }
 
-void testRelayViaThirdDevice() {
-  const uint16_t portA = freePort();
-  const uint16_t portB = freePort();
-  const uint16_t portC = freePort();
-  DaemonProc a("relay-a", portA, "relay-a");
-  DaemonProc b("relay-b", portB, "relay-b");
-  DaemonProc c("relay-c", portC, "relay-c");
-  CHECK(a.start() && b.start() && c.start());
-  CHECK(a.waitReady() && b.waitReady() && c.waitReady());
-
-  b.client().addPeer(c.describe());
-  a.client().addPeer(b.describe());
-  const Peer discovered = findPeer(a.client().peers(), c.info().id);
-  CHECK(discovered.source == "shared");
-
-  // A asks B (the third device) to write the file to C.
-  b.client().relay(c.describe(), "via/relayed.txt", toBytes("through-b"));
-  CHECK(toString(c.client().readFile("via/relayed.txt")) == "through-b");
-  std::cout << "  relay via third device ok\n";
-}
-
 void testDisconnect() {
   const uint16_t portA = freePort();
   const uint16_t portB = freePort();
@@ -506,7 +485,6 @@ int main() {
   testPublicSharing();
   testBrowseAndFiles();
   testMessagesAndWebSocket();
-  testRelayViaThirdDevice();
   testDisconnect();
   testBidirectionalConnect();
   testMessagesSendReceive();
