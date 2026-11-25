@@ -113,22 +113,6 @@ class IDevice {
   virtual void sendMessage(const std::string& text, const std::string& to,
                            const std::string& from = "") = 0;
   virtual std::vector<Message> readMessages(uint64_t since) const = 0;
-  virtual void relay(const Peer& target, const std::string& path,
-                     ByteReader reader) = 0;
-
-  // Buffered convenience: upload `data` to the target device.
-  void relay(const Peer& target, const std::string& path,
-             const Bytes& data) {
-    size_t offset = 0;
-    relay(target, path, [&offset, &data](Bytes& out, size_t maxBytes) -> size_t {
-      if (offset >= data.size()) return 0;
-      const size_t got = std::min(maxBytes, data.size() - offset);
-      std::copy(data.begin() + offset, data.begin() + offset + got,
-                std::back_inserter(out));
-      offset += got;
-      return got;
-    });
-  }
 };
 
 class DeviceClient : public IDevice {
@@ -148,9 +132,6 @@ class DeviceClient : public IDevice {
   void sendMessage(const std::string& text, const std::string& to,
                    const std::string& from = "") override;
   std::vector<Message> readMessages(uint64_t since) const override;
-  using IDevice::relay;
-  void relay(const Peer& target, const std::string& path,
-             ByteReader reader) override;
 
   const std::string& host() const { return host_; }
   uint16_t port() const { return port_; }

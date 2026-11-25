@@ -53,9 +53,6 @@ assert_contains "$BROWSE" "file.txt" "browse"
 MSGS="$("$CLI" msgs "127.0.0.1:$PB")"
 assert_contains "$MSGS" "privet soobshchenie" "messages"
 
-"$CLI" relay "127.0.0.1:$PB" "gamma" "$ROOT/source.txt" "cli/relayed.txt" >/dev/null
-[[ "$(cat "$ROOT/c/data/cli/relayed.txt")" == "privet cli" ]] || { echo "FAIL relay content" >&2; exit 1; }
-
 FMTRANS_HOME="$ROOT/b" "$CLI" disconnect "127.0.0.1:$PC" >/dev/null
 DEVICES_B="$(FMTRANS_HOME="$ROOT/b" "$CLI" devices)"
 if [[ "$DEVICES_B" == *"gamma"* ]]; then

@@ -296,20 +296,4 @@ net::HttpClient::Result DeviceClient::rawStream(
                                          headers, reader);
 }
 
-void DeviceClient::relay(const Peer& target, const std::string& path,
-                         ByteReader reader) {
-  const std::string query = "?target=" + encode(target.toJson().dump()) +
-                            "&path=" + encode(path);
-  const auto result =
-      rawStream("POST", "/relay" + query, reader, "application/octet-stream");
-  if (!result.ok) throw Error("relay failed");
-  json response;
-  try {
-    response = json::parse(toString(result.response.body));
-  } catch (const std::exception&) {
-    throw Error("invalid relay response");
-  }
-  if (!response.value("ok", false)) throw Error(response.value("error", "relay failed"));
-}
-
 }  // namespace fmtrans

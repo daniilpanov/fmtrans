@@ -178,23 +178,6 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request,
           200, success(messagesToJson(state_.messagesSince(since))).dump());
     }
 
-    if (method == "POST" && path == "/api/v1/relay") {
-      const Peer target =
-          Peer::fromJson(json::parse(request.query.at("target")));
-      const std::string remotePath = request.query.at("path");
-      DeviceClient client(target.host, target.port, target.password);
-      Bytes body = request.body;
-      size_t offset = 0;
-      client.writeFile(remotePath, [body = std::move(body), &offset](Bytes& out, size_t maxBytes) -> size_t {
-        if (offset >= body.size()) return 0;
-        const size_t got = std::min(maxBytes, body.size() - offset);
-        std::copy(body.begin() + offset, body.begin() + offset + got, std::back_inserter(out));
-        offset += got;
-        return got;
-      });
-      return net::HttpResponse::json(200, success().dump());
-    }
-
     if (knownPath(path)) return error(405, "method not allowed");
     return error(404, "not found");
   } catch (const std::exception& exception) {

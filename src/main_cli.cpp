@@ -162,23 +162,6 @@ void getRecursive(IDevice& device, const std::string& remotePath,
   }
 }
 
-void relayRecursive(IDevice& via, const Peer& target, const fs::path& localPath,
-                    const std::string& remotePath) {
-  if (fs::is_directory(localPath)) {
-    for (const auto& item : fs::directory_iterator(localPath)) {
-      relayRecursive(via, target, item.path(),
-                     joinPath(remotePath, item.path().filename().string()));
-    }
-    return;
-  }
-  std::ifstream input(localPath, std::ios::binary);
-  const std::string text{std::istreambuf_iterator<char>(input),
-                         std::istreambuf_iterator<char>()};
-  const Bytes data = toBytes(text);
-  via.relay(target, remotePath, data);
-  std::cout << "Передано через третье устройство: " << remotePath << "\n";
-}
-
 void printMessages(const std::vector<Message>& messages) {
   for (const auto& message : messages) {
     std::cout << "[" << message.seq << "] " << message.ts << " "
@@ -469,25 +452,6 @@ int main(int argc, char** argv) {
       const Target target = resolveTarget(arg(1), config, local);
       const uint64_t since = args.has("since") ? std::stoull(args.get("since")) : 0;
       printMessages(target.device->readMessages(since));
-      return 0;
-    }
-
-    if (command == "relay") {
-      const Target via = resolveTarget(arg(1), config, local);
-      const std::string toKey = arg(2);
-      Peer target;
-      bool found = false;
-      for (const Peer& peer : local.peers()) {
-        if (peer.id == toKey || peer.name == toKey || peer.address() == toKey) {
-          target = peer;
-          found = true;
-          break;
-        }
-      }
-      if (!found) throw Error("устройство не найдено: " + toKey);
-      const fs::path source = arg(3);
-      if (!fs::exists(source)) throw Error("нет такого файла или папки: " + source.string());
-      relayRecursive(*via.device, target, source, trimPath(arg(4)));
       return 0;
     }
 
