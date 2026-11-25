@@ -33,14 +33,18 @@ class NodeState {
 
   std::vector<FileEntry> browse(const std::string& relative) const;
   Bytes readFile(const std::string& relative) const;
-  void writeFile(const std::string& relative, const Bytes& data);
+  void readFileStream(const std::string& relative,
+                      ByteWriter writer) const;
+  void writeFile(const std::string& relative, ByteReader reader);
 
   void subscribe(int fd);
   void unsubscribe(int fd);
   void broadcast(const json& event);
 
- private:
+  // Resolves a relative path to an absolute path inside root (safety-checked).
   std::filesystem::path resolve(const std::string& relative) const;
+
+ private:
 
   LocalConfig config_;
   DeviceInfo info_;

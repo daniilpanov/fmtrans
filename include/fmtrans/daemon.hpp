@@ -19,7 +19,7 @@ class Daemon {
   NodeState& state() { return state_; }
 
  private:
-  net::HttpResponse handle(const net::HttpRequest& request);
+  net::HttpResponse handle(const net::HttpRequest& request, net::Socket& socket);
   void handleWs(int fd, const net::HttpRequest& request);
   net::HttpResponse error(int status, const std::string& message) const;
 

@@ -3,7 +3,12 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+#include <memory>
+
+namespace fs = std::filesystem;
 
 namespace fmtrans {
 namespace {
@@ -41,7 +46,9 @@ bool knownPath(const std::string& path) {
 Daemon::Daemon(LocalConfig config)
     : state_(config),
       server_(config.port,
-              [this](const net::HttpRequest& request) { return handle(request); },
+              [this](const net::HttpRequest& request, net::Socket& socket) {
+        return handle(request, socket);
+      },
               [this](int fd, const net::HttpRequest& request) { handleWs(fd, request); },
               config.host) {}
 
@@ -49,7 +56,8 @@ net::HttpResponse Daemon::error(int status, const std::string& message) const {
   return net::HttpResponse::json(status, json({{"ok", false}, {"error", message}}).dump());
 }
 
-net::HttpResponse Daemon::handle(const net::HttpRequest& request) {
+net::HttpResponse Daemon::handle(const net::HttpRequest& request,
+                                 net::Socket& socket) {
   const std::string& path = request.path;
   const std::string& method = request.method;
 
@@ -70,6 +78,10 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request) {
     }
 
     if (method == "POST" && path == "/api/v1/peers") {
+      if (request.body.empty() && request.bodyReader) {
+        // Chunked body not supported for peer connect; require Content-Length.
+        return error(400, "body required");
+      }
       Peer peer = Peer::fromJson(json::parse(toString(request.body)));
       if (peer.host.empty() || peer.port == 0) {
         return error(400, "host and port are required");
@@ -113,7 +125,17 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request) {
     }
 
     if (method == "PUT" && path == "/api/v1/fs/file") {
-      state_.writeFile(request.query.at("path"), request.body);
+      const std::string relPath = request.query.at("path");
+      // Buffered body: serve it in chunks through the streaming writer.
+      Bytes body = std::move(request.body);
+      size_t offset = 0;
+      state_.writeFile(relPath, [body = std::move(body), &offset](Bytes& out, size_t maxBytes) -> size_t {
+        if (offset >= body.size()) return 0;
+        const size_t got = std::min(maxBytes, body.size() - offset);
+        std::copy(body.begin() + offset, body.begin() + offset + got, std::back_inserter(out));
+        offset += got;
+        return got;
+      });
       return net::HttpResponse::json(200, success().dump());
     }
 
@@ -135,10 +157,19 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request) {
     }
 
     if (method == "POST" && path == "/api/v1/relay") {
-      const Peer target = Peer::fromJson(json::parse(request.query.at("target")));
+      const Peer target =
+          Peer::fromJson(json::parse(request.query.at("target")));
       const std::string remotePath = request.query.at("path");
       DeviceClient client(target.host, target.port, target.password);
-      client.writeFile(remotePath, request.body);
+      Bytes body = request.body;
+      size_t offset = 0;
+      client.writeFile(remotePath, [body = std::move(body), &offset](Bytes& out, size_t maxBytes) -> size_t {
+        if (offset >= body.size()) return 0;
+        const size_t got = std::min(maxBytes, body.size() - offset);
+        std::copy(body.begin() + offset, body.begin() + offset + got, std::back_inserter(out));
+        offset += got;
+        return got;
+      });
       return net::HttpResponse::json(200, success().dump());
     }
 

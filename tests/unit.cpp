@@ -66,14 +66,15 @@ void testSerialize() {
 
 void testHttpRoundtrip() {
   const uint16_t port = freePort();
-  net::HttpServer server(port, [](const net::HttpRequest& request) {
-    if (request.path == "/echo") {
-      return net::HttpResponse::text(200,
-                                     request.method + ":" + toString(request.body) +
-                                         ":" + request.header("x-test"));
-    }
-    return net::HttpResponse::json(404, "{\"ok\":false}");
-  });
+  net::HttpServer server(
+    port, [](const net::HttpRequest& request, net::Socket&) {
+      if (request.path == "/echo") {
+        return net::HttpResponse::text(200,
+                                       request.method + ":" + toString(request.body) +
+                                           ":" + request.header("x-test"));
+      }
+      return net::HttpResponse::json(404, "{\"ok\":false}");
+    });
   std::atomic<bool> ready{false};
   std::thread worker([&] {
     ready = true;

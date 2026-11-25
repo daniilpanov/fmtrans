@@ -21,6 +21,21 @@ inline std::string toString(const Bytes& bytes) {
   return std::string(bytes.begin(), bytes.end());
 }
 
+// Streaming source: fills `out` with up to `maxBytes`, returns bytes read (0 = EOF).
+using ByteReader = std::function<size_t(Bytes& out, size_t maxBytes)>;
+
+// Streaming sink: writes `data`, returns false on error.
+using ByteWriter = std::function<bool(const Bytes& data)>;
+
+// Streaming producer for a response: fills `chunk` with the next block of data
+// and returns true, or returns false when the stream is exhausted/failed.
+using BodyProducer = std::function<bool(Bytes& chunk)>;
+
+namespace fs_byte_reader {
+// Reads from a std::istream (binary).
+ByteReader fromStream(std::istream& input);
+}  // namespace fs_byte_reader
+
 }  // namespace fmtrans
 
 namespace fmtrans::net {
@@ -56,6 +71,9 @@ struct HttpRequest {
   std::map<std::string, std::string> headers;
   std::map<std::string, std::string> query;
   Bytes body;
+  // Optional streaming source for the request body. When set, the server reads
+  // the body from this reader instead of from `body`. Used for large uploads.
+  ByteReader bodyReader;
   // Bytes that arrived after the request body (e.g. an early WebSocket frame).
   Bytes extra;
   // Client address, used to keep sensitive fields for loopback callers only.
@@ -70,11 +88,19 @@ struct HttpResponse {
   std::string reason;
   std::map<std::string, std::string> headers;
   Bytes body;
+  // Optional streaming producer for the response body. When set, the server
+  // sends headers (without Content-Length) and then repeatedly calls this
+  // producer to get chunks, sending each to the client. Used for large
+  // downloads; `body` is ignored.
+  BodyProducer bodyStream;
 
   static HttpResponse json(int status, const std::string& body);
   static HttpResponse text(int status, const std::string& body);
   static HttpResponse bytes(int status, const Bytes& body,
                             const std::string& mime = "application/octet-stream");
+  // Serializes headers only (no body). When bodyStream is set, omits
+  // Content-Length (uses Connection: close).
+  Bytes serializeHeaders() const;
   Bytes serialize() const;
 };
 
@@ -96,11 +122,16 @@ class HttpClient {
                  const std::string& path,
                  const std::map<std::string, std::string>& headers = {},
                  const Bytes& body = {}, int timeoutMs = 5000);
+  // Streaming upload: reads the request body from `reader` in chunks.
+  Result requestStream(const std::string& method, const std::string& host,
+                       uint16_t port, const std::string& path,
+                       const std::map<std::string, std::string>& headers = {},
+                       ByteReader reader = {}, int timeoutMs = 5000);
 };
 
 class HttpServer {
  public:
-  using Handler = std::function<HttpResponse(const HttpRequest&)>;
+  using Handler = std::function<HttpResponse(const HttpRequest&, Socket&)>;
   using WsHandler = std::function<void(int fd, const HttpRequest&)>;
 
   HttpServer(uint16_t port, Handler handler, WsHandler wsHandler = {},
@@ -146,5 +177,10 @@ Frame recvFrame(int fd);
 std::map<std::string, std::string> parseQuery(const std::string& raw);
 
 std::string urlDecode(const std::string& value);
+
+// Position of the first "\r\n\r\n" (end of HTTP headers) or npos.
+size_t headerEnd(const Bytes& buffer);
+// Position of the first "\r\n" (end of a line) or npos.
+size_t lineEnd(const Bytes& buffer);
 
 }  // namespace fmtrans::net

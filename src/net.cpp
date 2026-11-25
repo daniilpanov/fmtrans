@@ -14,8 +14,30 @@
 #include <cerrno>
 #include <cctype>
 #include <cstring>
+#include <fstream>
+#include <iostream>
 #include <sstream>
 #include <thread>
+
+namespace fmtrans {
+
+namespace fs_byte_reader {
+
+ByteReader fromStream(std::istream& input) {
+  return [&input](Bytes& out, size_t maxBytes) -> size_t {
+    out.clear();
+    out.resize(maxBytes);
+    input.read(reinterpret_cast<char*>(out.data()),
+               static_cast<std::streamsize>(maxBytes));
+    const auto got = static_cast<size_t>(input.gcount());
+    out.resize(got);
+    return got;
+  };
+}
+
+}  // namespace fs_byte_reader
+
+}  // namespace fmtrans
 
 namespace fmtrans::net {
 namespace {
@@ -210,7 +232,7 @@ std::string HttpRequest::header(const std::string& key) const {
   return it == headers.end() ? std::string() : it->second;
 }
 
-Bytes HttpResponse::serialize() const {
+Bytes HttpResponse::serializeHeaders() const {
   std::string reasonText = reason;
   if (reasonText.empty()) {
     switch (status) {
@@ -235,10 +257,21 @@ Bytes HttpResponse::serialize() const {
   for (const auto& [key, value] : headers) {
     head << key << ": " << value << "\r\n";
   }
-  head << "Content-Length: " << body.size() << "\r\n";
-  head << "Connection: close\r\n\r\n";
-  Bytes result = toBytes(head.str());
-  result.insert(result.end(), body.begin(), body.end());
+  if (bodyStream) {
+    // Streaming response: no Content-Length, close when done.
+    head << "Connection: close\r\n\r\n";
+  } else {
+    head << "Content-Length: " << body.size() << "\r\n";
+    head << "Connection: close\r\n\r\n";
+  }
+  return toBytes(head.str());
+}
+
+Bytes HttpResponse::serialize() const {
+  Bytes result = serializeHeaders();
+  if (!bodyStream) {
+    result.insert(result.end(), body.begin(), body.end());
+  }
   return result;
 }
 
@@ -270,7 +303,7 @@ namespace {
 
 std::optional<size_t> contentLength(const std::map<std::string, std::string>& headers) {
   const auto it = headers.find("content-length");
-  if (it == headers.end()) return 0;
+  if (it == headers.end()) return std::nullopt;
   try {
     return static_cast<size_t>(std::stoull(it->second));
   } catch (...) {
@@ -278,9 +311,18 @@ std::optional<size_t> contentLength(const std::map<std::string, std::string>& he
   }
 }
 
+}  // namespace
+
 size_t headerEnd(const Bytes& buffer) {
   static const std::uint8_t needle[] = {'\r', '\n', '\r', '\n'};
   const auto it = std::search(buffer.begin(), buffer.end(), needle, needle + 4);
+  return it == buffer.end() ? std::string::npos
+                            : static_cast<size_t>(it - buffer.begin());
+}
+
+size_t lineEnd(const Bytes& buffer) {
+  static const std::uint8_t needle[] = {'\r', '\n'};
+  const auto it = std::search(buffer.begin(), buffer.end(), needle, needle + 2);
   return it == buffer.end() ? std::string::npos
                             : static_cast<size_t>(it - buffer.begin());
 }
@@ -303,7 +345,6 @@ bool finishBody(Socket& socket, Bytes& buffer, size_t headEnd, size_t needed) {
   return true;
 }
 
-}  // namespace
 
 std::optional<HttpRequest> readRequest(Socket& socket, int timeoutMs) {
   socket.setTimeouts(timeoutMs);
@@ -330,17 +371,64 @@ std::optional<HttpRequest> readRequest(Socket& socket, int timeoutMs) {
     request.path = request.path.substr(0, question);
   }
 
-  const auto length = contentLength(request.headers);
-  if (!length) return std::nullopt;
-  if (*length > kMaxBodyBytes) {
-    request.tooLarge = true;
+  const auto transferEncoding =
+      request.headers.find("transfer-encoding");
+  if (transferEncoding != request.headers.end() &&
+      transferEncoding->second.find("chunked") != std::string::npos) {
+    // Chunked request: read the whole body into memory for now.
+    // True zero-copy streaming from socket to disk is a follow-up.
+    Bytes body;
+    // Carry over any body bytes already read past the headers.
+    Bytes chunkBuf(buffer.begin() + headEnd + 4, buffer.end());
+    buffer.clear();
+    while (true) {
+      // Read chunk size line.
+      while (true) {
+        const auto crlf = lineEnd(chunkBuf);
+        if (crlf != std::string::npos) break;
+        if (!socket.recvSome(chunkBuf)) return std::nullopt;
+        if (chunkBuf.size() > 16 * 1024 * 1024) return std::nullopt;
+      }
+      const auto crlf = lineEnd(chunkBuf);
+      const std::string sizeStr =
+          toString(Bytes(chunkBuf.begin(), chunkBuf.begin() + crlf));
+      chunkBuf.erase(chunkBuf.begin(), chunkBuf.begin() + crlf + 2);
+      size_t chunkSize = 0;
+      try {
+        chunkSize = std::stoul(sizeStr, nullptr, 16);
+      } catch (...) {
+        return std::nullopt;
+      }
+      if (chunkSize == 0) {
+        while (chunkBuf.size() < 2) {
+          if (!socket.recvSome(chunkBuf)) return std::nullopt;
+        }
+        chunkBuf.erase(chunkBuf.begin(), chunkBuf.begin() + 2);
+        break;
+      }
+      while (chunkBuf.size() < chunkSize + 2) {
+        if (!socket.recvSome(chunkBuf)) return std::nullopt;
+      }
+      body.insert(body.end(), chunkBuf.begin(), chunkBuf.begin() + chunkSize);
+      chunkBuf.erase(chunkBuf.begin(), chunkBuf.begin() + chunkSize + 2);
+    }
+    request.body = body;
+    request.extra = chunkBuf;
     return request;
   }
-  if (!finishBody(socket, buffer, headEnd, *length)) return std::nullopt;
-  const size_t bodyBegin = headEnd + 4;
-  request.body = Bytes(buffer.begin() + bodyBegin,
-                       buffer.begin() + bodyBegin + *length);
-  request.extra = Bytes(buffer.begin() + bodyBegin + *length, buffer.end());
+
+  const auto length = contentLength(request.headers);
+  if (length) {
+    if (*length > kMaxBodyBytes) {
+      request.tooLarge = true;
+      return request;
+    }
+    if (!finishBody(socket, buffer, headEnd, *length)) return std::nullopt;
+    const size_t bodyBegin = headEnd + 4;
+    request.body = Bytes(buffer.begin() + bodyBegin,
+                         buffer.begin() + bodyBegin + *length);
+    request.extra = Bytes(buffer.begin() + bodyBegin + *length, buffer.end());
+  }
   return request;
 }
 
@@ -363,12 +451,77 @@ std::optional<HttpResponse> readResponse(Socket& socket, int timeoutMs) {
     response.headers[lower(line.substr(0, colon))] = trim(line.substr(colon + 1));
   }
 
-  const auto length = contentLength(response.headers);
-  if (!length) return std::nullopt;
-  if (!finishBody(socket, buffer, headEnd, *length)) return std::nullopt;
+  // Discard header bytes from buffer; only body bytes remain.
   const size_t bodyBegin = headEnd + 4;
-  response.body = Bytes(buffer.begin() + bodyBegin,
-                        buffer.begin() + bodyBegin + *length);
+  if (buffer.size() > bodyBegin) {
+    buffer.erase(buffer.begin(), buffer.begin() + bodyBegin);
+  } else {
+    buffer.clear();
+  }
+
+  const auto transferEncoding = response.headers.find("transfer-encoding");
+  if (transferEncoding != response.headers.end() &&
+      transferEncoding->second.find("chunked") != std::string::npos) {
+    // Read chunked body.
+    Bytes body;
+    while (true) {
+      // Read chunk size line (until \r\n).
+      while (true) {
+        const auto crlf = lineEnd(buffer);
+        if (crlf != std::string::npos) break;
+        if (!socket.recvSome(buffer)) return std::nullopt;
+        if (buffer.size() > 16 * 1024 * 1024) return std::nullopt;
+      }
+      const auto crlf = lineEnd(buffer);
+      const std::string sizeStr =
+          toString(Bytes(buffer.begin(), buffer.begin() + crlf));
+      buffer.erase(buffer.begin(), buffer.begin() + crlf + 2);
+      size_t chunkSize = 0;
+      try {
+        chunkSize = std::stoul(sizeStr, nullptr, 16);
+      } catch (...) {
+        return std::nullopt;
+      }
+      if (chunkSize == 0) {
+        // Read trailing CRLF.
+        while (buffer.size() < 2) {
+          if (!socket.recvSome(buffer)) return std::nullopt;
+        }
+        buffer.erase(buffer.begin(), buffer.begin() + 2);
+        break;
+      }
+      // Read chunk data + trailing CRLF.
+      while (buffer.size() < chunkSize + 2) {
+        if (!socket.recvSome(buffer)) return std::nullopt;
+      }
+      body.insert(body.end(), buffer.begin(), buffer.begin() + chunkSize);
+      buffer.erase(buffer.begin(), buffer.begin() + chunkSize + 2);
+    }
+    response.body = body;
+    return response;
+  }
+
+  const auto length = contentLength(response.headers);
+  if (length) {
+    // buffer may already contain some body bytes (carried over from header read).
+    while (buffer.size() < *length) {
+      Bytes chunk;
+      if (!socket.recvSome(chunk)) return std::nullopt;
+      buffer.insert(buffer.end(), chunk.begin(), chunk.end());
+    }
+    response.body = Bytes(buffer.begin(), buffer.begin() + *length);
+    return response;
+  }
+  // No Content-Length and no chunked: read until connection close.
+  // buffer may already contain body bytes carried over from header read.
+  Bytes body = std::move(buffer);
+  Bytes chunk;
+  while (true) {
+    chunk.clear();
+    if (!socket.recvSome(chunk)) break;
+    body.insert(body.end(), chunk.begin(), chunk.end());
+  }
+  response.body = body;
   return response;
 }
 
@@ -392,6 +545,65 @@ HttpClient::Result HttpClient::request(const std::string& method, const std::str
   Bytes raw = toBytes(head);
   raw.insert(raw.end(), body.begin(), body.end());
   if (!socket.sendAll(raw)) {
+    result.error = "send failed";
+    return result;
+  }
+  const auto response = readResponse(socket, timeoutMs);
+  if (!response) {
+    result.error = "read response failed";
+    return result;
+  }
+  result.ok = true;
+  result.response = *response;
+  return result;
+}
+
+HttpClient::Result HttpClient::requestStream(const std::string& method,
+                                             const std::string& host, uint16_t port,
+                                             const std::string& path,
+                                             const std::map<std::string, std::string>& headers,
+                                             ByteReader reader, int timeoutMs) {
+  Result result;
+  Socket socket;
+  if (!socket.connectTo(host, port, timeoutMs)) {
+    result.error = "connect failed: " + host + ":" + std::to_string(port);
+    return result;
+  }
+  std::string head = method + " " + path + " HTTP/1.1\r\n";
+  head += "Host: " + host + ":" + std::to_string(port) + "\r\n";
+  for (const auto& [key, value] : headers) {
+    head += key + ": " + value + "\r\n";
+  }
+  // Streaming request: chunked transfer encoding.
+  head += "Transfer-Encoding: chunked\r\n";
+  head += "Connection: close\r\n\r\n";
+  if (!socket.sendAll(toBytes(head))) {
+    result.error = "send failed";
+    return result;
+  }
+  Bytes chunk;
+  while (true) {
+    chunk.clear();
+    const size_t got = reader(chunk, 65536);
+    if (got == 0) break;
+    std::ostringstream sizeHead;
+    sizeHead << std::hex << got << "\r\n";
+    if (!socket.sendAll(toBytes(sizeHead.str()))) {
+      result.error = "send failed";
+      return result;
+    }
+    if (!socket.sendAll(chunk)) {
+      result.error = "send failed";
+      return result;
+    }
+    const std::string crlf = "\r\n";
+    if (!socket.sendAll(toBytes(crlf))) {
+      result.error = "send failed";
+      return result;
+    }
+  }
+  const std::string trailer = "0\r\n\r\n";
+  if (!socket.sendAll(toBytes(trailer))) {
     result.error = "send failed";
     return result;
   }
@@ -467,8 +679,18 @@ bool HttpServer::serve() {
         wsHandler(socket.release(), *request);
         return;
       }
-      const HttpResponse response = handler(*request);
-      socket.sendAll(response.serialize());
+      const HttpResponse response = handler(*request, socket);
+      const Bytes headers = response.serializeHeaders();
+      if (!socket.sendAll(headers)) return;
+      if (response.bodyStream) {
+        Bytes chunk;
+        while (response.bodyStream(chunk)) {
+          if (!socket.sendAll(chunk)) return;
+          chunk.clear();
+        }
+      } else {
+        socket.sendAll(response.body);
+      }
     }).detach();
   }
   return true;
@@ -598,4 +820,6 @@ Frame recvFrame(int fd) {
 }
 
 }  // namespace ws
+
 }  // namespace fmtrans::net
+

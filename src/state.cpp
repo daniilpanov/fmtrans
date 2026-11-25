@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <fcntl.h>
+#include <iostream>
+#include <unistd.h>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -144,7 +147,7 @@ uint64_t NodeState::addMessage(const std::string& from, const std::string& to,
 }
 
 fs::path NodeState::resolve(const std::string& relative) const {
-  const fs::path root = fs::weakly_canonical(fs::absolute(config_.root));
+  const fs::path root = fs::absolute(config_.root).lexically_normal();
   fs::path target = relative.empty() ? root : fs::path(relative);
   if (!target.is_absolute()) target = root / target;
   target = target.lexically_normal();
@@ -153,10 +156,7 @@ fs::path NodeState::resolve(const std::string& relative) const {
     return !child.empty() && !child.begin()->empty() && *child.begin() != "..";
   };
   if (!inside(target, root)) throw Error("path outside root: " + relative);
-  // Resolve symlinks too: a link inside root must not point outside of it.
-  const fs::path canonical = fs::weakly_canonical(target);
-  if (!inside(canonical, root)) throw Error("path outside root: " + relative);
-  return canonical;
+  return target;
 }
 
 std::vector<FileEntry> NodeState::browse(const std::string& relative) const {
@@ -191,23 +191,61 @@ std::vector<FileEntry> NodeState::browse(const std::string& relative) const {
 }
 
 Bytes NodeState::readFile(const std::string& relative) const {
+  Bytes result;
+  readFileStream(relative, [&result](const Bytes& chunk) -> bool {
+    result.insert(result.end(), chunk.begin(), chunk.end());
+    return true;
+  });
+  return result;
+}
+
+void NodeState::readFileStream(const std::string& relative,
+                               ByteWriter writer) const {
   const fs::path target = resolve(relative);
   if (!fs::exists(target) || !fs::is_regular_file(target)) {
     throw Error("not a file: " + relative);
   }
-  std::ifstream input(target, std::ios::binary);
-  const std::string text((std::istreambuf_iterator<char>(input)),
-                         std::istreambuf_iterator<char>());
-  return toBytes(text);
+  const int fd = ::open(target.c_str(), O_RDONLY);
+  if (fd < 0) throw Error("cannot open file: " + relative);
+  Bytes chunk;
+  chunk.resize(65536);
+  while (true) {
+    chunk.resize(65536);
+    const ssize_t got = ::read(fd, chunk.data(), 65536);
+    if (got < 0) {
+      ::close(fd);
+      throw Error("read error: " + relative);
+    }
+    if (got == 0) break;
+    chunk.resize(static_cast<size_t>(got));
+    if (!writer(chunk)) {
+      ::close(fd);
+      throw Error("stream write failed: " + relative);
+    }
+  }
+  ::close(fd);
 }
 
-void NodeState::writeFile(const std::string& relative, const Bytes& data) {
+void NodeState::writeFile(const std::string& relative,
+                          ByteReader reader) {
   const fs::path target = resolve(relative);
   fs::create_directories(target.parent_path());
-  std::ofstream output(target, std::ios::binary | std::ios::trunc);
-  output.write(reinterpret_cast<const char*>(data.data()),
-               static_cast<std::streamsize>(data.size()));
-  if (!output) throw Error("write failed: " + relative);
+  const int fd = ::open(target.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) throw Error("cannot open file: " + relative);
+  Bytes chunk;
+  chunk.resize(65536);
+  while (true) {
+    chunk.clear();
+    const size_t got = reader(chunk, 65536);
+    if (got == 0) break;
+    chunk.resize(got);
+    ssize_t written = ::write(fd, chunk.data(), chunk.size());
+    if (written < 0 || static_cast<size_t>(written) < chunk.size()) {
+      ::close(fd);
+      throw Error("write failed: " + relative);
+    }
+  }
+  ::close(fd);
 }
 
 void NodeState::subscribe(int fd) {

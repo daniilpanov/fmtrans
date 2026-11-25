@@ -221,10 +221,21 @@ std::vector<FileEntry> DeviceClient::browse(const std::string& path) const {
 }
 
 Bytes DeviceClient::readFile(const std::string& path) const {
+  Bytes result;
+  readFileStream(path, [&result](const Bytes& chunk) -> bool {
+    result.insert(result.end(), chunk.begin(), chunk.end());
+    return true;
+  });
+  return result;
+}
+
+void DeviceClient::readFileStream(const std::string& path,
+                                  ByteWriter writer) const {
   const auto result = raw("GET", "/fs/file?path=" + encode(path));
   if (!result.ok) throw Error("read file failed: " + path);
   if (result.response.status != 200) {
-    std::string message = "read file failed: HTTP " + std::to_string(result.response.status);
+    std::string message = "read file failed: HTTP " +
+                          std::to_string(result.response.status);
     try {
       const json error = json::parse(toString(result.response.body));
       if (!error.value("ok", true)) message = error.value("error", message);
@@ -232,18 +243,28 @@ Bytes DeviceClient::readFile(const std::string& path) const {
     }
     throw Error(message);
   }
-  return result.response.body;
+  // Buffered response: stream body chunks to writer.
+  const size_t chunkSize = 65536;
+  for (size_t off = 0; off < result.response.body.size(); off += chunkSize) {
+    Bytes chunk(result.response.body.begin() + off,
+                result.response.body.begin() +
+                    std::min(off + chunkSize, result.response.body.size()));
+    if (!writer(chunk)) throw Error("stream write failed: " + path);
+  }
 }
 
-void DeviceClient::writeFile(const std::string& path, const Bytes& data) {
-  const auto result = raw("PUT", "/fs/file?path=" + encode(path), data,
-                          "application/octet-stream");
-  if (!result.ok) throw Error("write file failed: " + path);
+void DeviceClient::writeFile(const std::string& path,
+                             ByteReader reader) {
+  const std::string query = "/fs/file?path=" + encode(path);
+  // Use streaming upload via chunked transfer encoding.
+  const auto r = rawStream("PUT", query, reader, "application/octet-stream");
+  if (!r.ok) throw Error("write file failed: " + path);
   json response;
   try {
-    response = json::parse(toString(result.response.body));
+    response = json::parse(toString(r.response.body));
   } catch (const std::exception&) {
-    throw Error("write file failed: HTTP " + std::to_string(result.response.status));
+    throw Error("write file failed: HTTP " +
+                std::to_string(r.response.status));
   }
   if (!response.value("ok", false)) throw Error(response.value("error", "write failed"));
 }
@@ -261,11 +282,22 @@ std::vector<Message> DeviceClient::readMessages(uint64_t since) const {
   return result;
 }
 
+net::HttpClient::Result DeviceClient::rawStream(
+    const std::string& method, const std::string& path,
+    ByteReader reader, const std::string& contentType) const {
+  std::map<std::string, std::string> headers;
+  if (!password_.empty()) headers["X-Fmtrans-Auth"] = password_;
+  if (!contentType.empty()) headers["Content-Type"] = contentType;
+  return net::HttpClient().requestStream(method, host_, port_, "/api/v1" + path,
+                                         headers, reader);
+}
+
 void DeviceClient::relay(const Peer& target, const std::string& path,
-                         const Bytes& data) {
+                         ByteReader reader) {
   const std::string query = "?target=" + encode(target.toJson().dump()) +
                             "&path=" + encode(path);
-  const auto result = raw("POST", "/relay" + query, data, "application/octet-stream");
+  const auto result =
+      rawStream("POST", "/relay" + query, reader, "application/octet-stream");
   if (!result.ok) throw Error("relay failed");
   json response;
   try {

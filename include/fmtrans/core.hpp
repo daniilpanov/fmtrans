@@ -2,7 +2,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -76,12 +78,57 @@ class IDevice {
   virtual void removePeer(const std::string& id) = 0;
   virtual std::vector<FileEntry> browse(const std::string& path) const = 0;
   virtual Bytes readFile(const std::string& path) const = 0;
-  virtual void writeFile(const std::string& path, const Bytes& data) = 0;
+  virtual void readFileStream(const std::string& path,
+                              ByteWriter writer) const = 0;
+  virtual void writeFile(const std::string& path, ByteReader reader) = 0;
+
+  // Buffered convenience: writes `data` via the streaming writeFile.
+  void writeFile(const std::string& path, const Bytes& data) {
+    size_t offset = 0;
+    writeFile(path, [&offset, &data](Bytes& out, size_t maxBytes) -> size_t {
+      if (offset >= data.size()) return 0;
+      const size_t got = std::min(maxBytes, data.size() - offset);
+      std::copy(data.begin() + offset, data.begin() + offset + got,
+                std::back_inserter(out));
+      offset += got;
+      return got;
+    });
+  }
+
+  // Buffered convenience: reads `data` from the reader.
+  static Bytes readAll(ByteReader reader) {
+    Bytes data;
+    Bytes chunk;
+    chunk.resize(65536);
+    while (true) {
+      chunk.clear();
+      const size_t got = reader(chunk, 65536);
+      if (got == 0) break;
+      chunk.resize(got);
+      data.insert(data.end(), chunk.begin(), chunk.end());
+    }
+    return data;
+  }
+
   virtual void sendMessage(const std::string& text, const std::string& to,
                            const std::string& from = "") = 0;
   virtual std::vector<Message> readMessages(uint64_t since) const = 0;
   virtual void relay(const Peer& target, const std::string& path,
-                     const Bytes& data) = 0;
+                     ByteReader reader) = 0;
+
+  // Buffered convenience: upload `data` to the target device.
+  void relay(const Peer& target, const std::string& path,
+             const Bytes& data) {
+    size_t offset = 0;
+    relay(target, path, [&offset, &data](Bytes& out, size_t maxBytes) -> size_t {
+      if (offset >= data.size()) return 0;
+      const size_t got = std::min(maxBytes, data.size() - offset);
+      std::copy(data.begin() + offset, data.begin() + offset + got,
+                std::back_inserter(out));
+      offset += got;
+      return got;
+    });
+  }
 };
 
 class DeviceClient : public IDevice {
@@ -94,12 +141,16 @@ class DeviceClient : public IDevice {
   void removePeer(const std::string& id) override;
   std::vector<FileEntry> browse(const std::string& path) const override;
   Bytes readFile(const std::string& path) const override;
-  void writeFile(const std::string& path, const Bytes& data) override;
+  void readFileStream(const std::string& path,
+                      ByteWriter writer) const override;
+  using IDevice::writeFile;
+  void writeFile(const std::string& path, ByteReader reader) override;
   void sendMessage(const std::string& text, const std::string& to,
                    const std::string& from = "") override;
   std::vector<Message> readMessages(uint64_t since) const override;
+  using IDevice::relay;
   void relay(const Peer& target, const std::string& path,
-             const Bytes& data) override;
+             ByteReader reader) override;
 
   const std::string& host() const { return host_; }
   uint16_t port() const { return port_; }
@@ -109,6 +160,11 @@ class DeviceClient : public IDevice {
   net::HttpClient::Result raw(const std::string& method, const std::string& path,
                               const Bytes& body = {},
                               const std::string& contentType = "") const;
+  // Streaming variant: upload body via `reader` using chunked transfer encoding.
+  net::HttpClient::Result rawStream(const std::string& method,
+                                    const std::string& path,
+                                    ByteReader reader,
+                                    const std::string& contentType = "") const;
   json call(const std::string& method, const std::string& path,
             const json& body = json::object()) const;
   std::string addressHost() const;
