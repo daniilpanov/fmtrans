@@ -87,30 +87,30 @@ std::vector<Peer> NodeState::peers() const {
 
 void NodeState::addPeer(const Peer& peer) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if (callbackInProgress_) return;
   Peer stored = peer;
   if (stored.id.empty()) stored.id = makeId();
-  stored.publicAccess = stored.password.empty();
-  const auto it = std::find_if(peers_.begin(), peers_.end(), [&](const Peer& item) {
-    return item.id == stored.id || (item.host == stored.host && item.port == stored.port);
-  });
-  if (it != peers_.end()) {
-    // A direct connection always wins over a discovered one.
-    if (it->source == "shared" && stored.source == "direct") *it = stored;
-    else it->password = stored.password.empty() ? it->password : stored.password;
-  } else {
-    peers_.push_back(stored);
+  // Cannot add oneself as a peer.
+  if (stored.id == info_.id) throw Error("cannot add self as peer");
+  // Single source of truth: reject duplicates by id, name, or address.
+  for (const auto& item : peers_) {
+    if (item.id == stored.id) throw Error("peer with id " + stored.id + " already exists");
+    if (!stored.name.empty() && item.name == stored.name) throw Error("peer with name " + stored.name + " already exists");
+    if (item.host == stored.host && item.port == stored.port) throw Error("peer at " + stored.address() + " already exists");
   }
+  peers_.push_back(stored);
   save();
 }
 
 void NodeState::removePeer(const std::string& id) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  peers_.erase(std::remove_if(peers_.begin(), peers_.end(),
-                              [&](const Peer& peer) {
-                                return peer.id == id || peer.name == id ||
-                                       peer.address() == id;
-                              }),
-               peers_.end());
+  const auto it = std::find_if(peers_.begin(), peers_.end(),
+                               [&](const Peer& peer) {
+                                 return peer.id == id || peer.name == id ||
+                                        peer.address() == id;
+                               });
+  if (it == peers_.end()) throw Error("peer not found: " + id);
+  peers_.erase(it);
   save();
 }
 
