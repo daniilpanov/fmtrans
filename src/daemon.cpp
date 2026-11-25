@@ -9,6 +9,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <thread>
 
 namespace fs = std::filesystem;
 
@@ -95,6 +96,25 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request,
       peer.publicAccess = peer.password.empty() && remote.publicAccess;
       peer.source = "direct";
       state_.addPeer(peer);
+
+      // Register the local device on the remote device so the connection is
+      // bidirectional: the remote device also knows about us. The remote
+      // device calls back, but callbackInProgress_ prevents infinite recursion.
+      if (!state_.callbackInProgress_) {
+        Peer localPeer;
+        localPeer.id = state_.info().id;
+        localPeer.name = state_.info().name;
+        localPeer.host = state_.config().host;
+        localPeer.port = state_.config().port;
+        localPeer.password = state_.config().password;
+        localPeer.source = "direct";
+        state_.setCallbackInProgress(true);
+        {
+          DeviceClient remoteClient(peer.host, peer.port, peer.password);
+          remoteClient.addPeer(localPeer);
+        }
+        state_.setCallbackInProgress(false);
+      }
 
       // Share the remote peer's public, directly-connected devices (one hop only).
       for (const Peer& candidate : probe.peers()) {
