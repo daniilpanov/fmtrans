@@ -330,6 +330,60 @@ void testDisconnect() {
   std::cout << "  disconnect ok\n";
 }
 
+// Bug 1: connect from A to B must also register A on B (bidirectional connect).
+void testBidirectionalConnect() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("bidi-a", portA, "node-a");
+  DaemonProc b("bidi-b", portB, "node-b");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  a.client().addPeer(b.describe());
+  // After connect from A to B, B must also know about A.
+  const auto peersB = b.client().peers();
+  CHECK(containsPeer(peersB, a.info().id));
+  std::cout << "  bidirectional connect ok\n";
+}
+
+// Bug 2: messages sent from A to B must be readable on B.
+void testMessagesSendReceive() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("msg-a", portA, "node-a");
+  DaemonProc b("msg-b", portB, "node-b");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  a.client().addPeer(b.describe());
+  // A sends a message to B (POST /messages on device B).
+  DeviceClient clientB("127.0.0.1", portB);
+  clientB.sendMessage("hello from A", "", a.info().id);
+  const auto messagesB = b.client().readMessages(0);
+  CHECK(messagesB.size() == 1);
+  CHECK(messagesB[0].text == "hello from A");
+  CHECK(messagesB[0].from == a.info().id);
+  std::cout << "  messages send/receive ok\n";
+}
+
+// Bug 3: connect with --name must store the name in the peer descriptor.
+void testConnectWithName() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("name-a", portA, "node-a");
+  DaemonProc b("name-b", portB, "node-b");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  Peer bPeer = b.describe();
+  bPeer.name = "my-custom-name";
+  a.client().addPeer(bPeer);
+  const auto peers = a.client().peers();
+  CHECK(peers.size() == 1);
+  CHECK(peers[0].name == "my-custom-name");
+  std::cout << "  connect with name ok\n";
+}
+
 }  // namespace
 
 int main() {
@@ -341,6 +395,9 @@ int main() {
   testMessagesAndWebSocket();
   testRelayViaThirdDevice();
   testDisconnect();
+  testBidirectionalConnect();
+  testMessagesSendReceive();
+  testConnectWithName();
   if (failures == 0) {
     std::cout << "integration: all tests passed\n";
     return 0;
