@@ -2,12 +2,17 @@
 #include "fmtrans/core.hpp"
 #include "fmtrans/daemon.hpp"
 #include "fmtrans/net.hpp"
+#include "fmtrans/platform.hpp"
 
+#if defined(_WIN32)
+#error "Windows port not yet implemented: main_cli.cpp uses POSIX process APIs"
+#else
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 #include <cerrno>
 #include <filesystem>
@@ -243,15 +248,17 @@ int readPid() {
 }
 
 bool isDaemonProcess(int pid) {
+#if defined(_WIN32)
+  return platform::processExists(pid);
+#else
   if (pid <= 0) return false;
   if (::kill(pid, 0) != 0) return false;
-  std::ifstream input("/proc/" + std::to_string(pid) + "/cmdline", std::ios::binary);
-  if (!input) return true;
-  const std::string cmdline((std::istreambuf_iterator<char>(input)),
-                            std::istreambuf_iterator<char>());
+  const std::string cmdline = platform::processCmdline(pid);
+  if (cmdline.empty()) return true;
   // The background daemon keeps the CLI command line ("fmtrans daemon start ...").
   return cmdline.find("fmtrans") != std::string::npos &&
          cmdline.find("daemon") != std::string::npos;
+#endif
 }
 
 }  // namespace

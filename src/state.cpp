@@ -1,17 +1,19 @@
 #include "fmtrans/state.hpp"
 
-#include <fcntl.h>
-#include <sys/stat.h>
+#include "fmtrans/platform.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <ctime>
-#include <fcntl.h>
-#include <iostream>
-#include <unistd.h>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace fmtrans {
 namespace fs = std::filesystem;
@@ -63,7 +65,7 @@ void NodeState::save() const {
     std::ofstream output(temporary, std::ios::trunc);
     output << value.dump(2);
   }
-  ::chmod(temporary.c_str(), 0600);
+  platform::setFilePermissions(temporary, 0600);
   fs::rename(temporary, path);
 }
 
@@ -201,6 +203,9 @@ Bytes NodeState::readFile(const std::string& relative) const {
 
 void NodeState::readFileStream(const std::string& relative,
                                ByteWriter writer) const {
+#if defined(_WIN32)
+  throw Error("file streaming not implemented on Windows");
+#else
   const fs::path target = resolve(relative);
   if (!fs::exists(target) || !fs::is_regular_file(target)) {
     throw Error("not a file: " + relative);
@@ -224,10 +229,14 @@ void NodeState::readFileStream(const std::string& relative,
     }
   }
   ::close(fd);
+#endif
 }
 
 void NodeState::writeFile(const std::string& relative,
                           ByteReader reader) {
+#if defined(_WIN32)
+  throw Error("file streaming not implemented on Windows");
+#else
   const fs::path target = resolve(relative);
   fs::create_directories(target.parent_path());
   const int fd = ::open(target.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -246,6 +255,7 @@ void NodeState::writeFile(const std::string& relative,
     }
   }
   ::close(fd);
+#endif
 }
 
 void NodeState::subscribe(int fd) {

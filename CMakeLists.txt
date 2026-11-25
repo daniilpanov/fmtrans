@@ -19,6 +19,7 @@ add_library(fmtrans_core STATIC
   src/core.cpp
   src/state.cpp
   src/daemon.cpp
+  src/platform.cpp
 )
 target_include_directories(fmtrans_core PUBLIC include third_party)
 target_link_libraries(fmtrans_core PUBLIC Threads::Threads)

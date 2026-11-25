@@ -1,6 +1,8 @@
 #include "fmtrans/daemon.hpp"
 
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <fstream>

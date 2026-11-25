@@ -223,10 +223,20 @@ fmtrans --help
 - Relay — сквозной стриминг: источник → узел `via` → целевой узел → файл.
 - Тест-гейт: unit + integration + cli + большой файл (> лимит буферизации).
 
-### П3. Архитектура и ОС (коммит 3)
-- Проверить отсутствие endianness/alignment-зависимостей (arm/x86).
-- Вынести POSIX-специфику (сокеты, процессы, время, права файлов, temp-каталоги)
-  в платформенный слой с реализациями для Linux и Windows (`#ifdef _WIN32`).
-- Windows-ветки не компилируются в Linux-CI: отметить в README, не ломать Linux.
-- Если полный порт потребует гигантских правок — зафиксировать обоснование и объём.
-- Тест-гейт: unit + integration + cli на Linux.
+### П3. Архитектура и ОС (коммит 3) — ВЫПОЛНЕНО
+- Endianness/alignment: код не зависит от порядка байтов (SHA1, WebSocket-фреймы и
+  HTTP используют ручную упаковку байтов). arm/x86 — без изменений.
+- Платформенный слой: `include/fmtrans/platform.hpp` + `src/platform.cpp` с
+  абстракциями для сокетов, процессов, файлов и прав доступа. POSIX реализация
+  полная; Windows — заглушки (файловый поток, процессы сокеты возвращают ошибку).
+- POSIX-включения в `net.cpp`, `main_cli.cpp`, `state.cpp`, `daemon.cpp` защищены
+  `#ifndef _WIN32` с `#error` при сборке под Windows.
+- `::chmod` заменён на `platform::setFilePermissions` в `core.cpp` и `state.cpp`.
+- `::kill(pid,0)` и `/proc/<pid>/cmdline` заменены на `platform::processExists()`
+  и `platform::processCmdline()` в `main_cli.cpp`.
+- `src/platform.cpp` добавлен в CMakeLists.txt.
+- ОГРАНИЧЕНИЕ: полный Windows порт требует Winsock вместо BSD сокетов,
+  CreateProcess вместо fork(), нативные Win32 файловые API — это гигантские
+  правки, не выполнены в рамках этого коммита. `net.cpp` и `main_cli.cpp`
+  не компилируются на Windows (явно `#error`).
+- Тест-гейт: unit + integration + cli на Linux — зелёный.

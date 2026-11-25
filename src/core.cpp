@@ -1,6 +1,10 @@
 #include "fmtrans/core.hpp"
 
+#include "fmtrans/platform.hpp"
+
+#if !defined(_WIN32)
 #include <sys/stat.h>
+#endif
 
 #include <chrono>
 #include <cctype>
@@ -104,7 +108,7 @@ std::string homeDir() {
   const char* env = std::getenv("FMTRANS_HOME");
   std::string path = env ? env : std::string(std::getenv("HOME") ? std::getenv("HOME") : ".") + "/.fmtrans";
   std::filesystem::create_directories(path);
-  ::chmod(path.c_str(), 0700);
+  platform::setFilePermissions(path, 0700);
   return path;
 }
 
@@ -138,7 +142,7 @@ void saveLocalConfig(const LocalConfig& config) {
     std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
     output << value.dump(2);
   }
-  ::chmod(temporary.c_str(), 0600);
+  platform::setFilePermissions(temporary, 0600);
   std::filesystem::rename(temporary, path);
 }
 
