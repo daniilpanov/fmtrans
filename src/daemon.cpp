@@ -137,7 +137,36 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request,
     if (method == "DELETE" && path.rfind("/api/v1/peers/", 0) == 0) {
       const std::string id =
           net::urlDecode(path.substr(std::string("/api/v1/peers/").size()));
+      auto peerOpt = state_.findPeer(id);
+      if (!peerOpt) {
+        return error(404, "peer not found: " + id);
+      }
       state_.removePeer(id);
+
+      // Обратный отключ: уведомляем удалённое устройство, чтобы оно тоже
+      // удалило нас из своего списка. Callback-protection предотвращает
+      // бесконечную рекурсию.
+      if (!state_.callbackInProgress_) {
+        Peer localPeer;
+        localPeer.id = state_.info().id;
+        localPeer.name = state_.info().name;
+        localPeer.host = state_.config().host;
+        localPeer.port = state_.config().port;
+        localPeer.password = state_.config().password;
+        localPeer.source = "direct";
+        state_.setCallbackInProgress(true);
+        {
+          DeviceClient remoteClient(peerOpt->host, peerOpt->port,
+                                    peerOpt->password);
+          try {
+            remoteClient.removePeer(localPeer.id);
+          } catch (const std::exception&) {
+            // Лучше всего по 가능ности: удалённое может быть недоступно.
+          }
+        }
+        state_.setCallbackInProgress(false);
+      }
+
       return net::HttpResponse::json(200, success().dump());
     }
 
