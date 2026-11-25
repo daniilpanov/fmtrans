@@ -199,10 +199,10 @@ void testPublicSharing() {
   a.client().addPeer(b.describe());
   const auto peers = a.client().peers();
   CHECK(containsPeer(peers, b.info().id));
-  CHECK(containsPeer(peers, c.info().id));
+  // REVERTME: auto-sharing is temporarily disabled, so C must NOT appear via sharing.
+  CHECK(!containsPeer(peers, c.info().id));
   CHECK(findPeer(peers, b.info().id).source == "direct");
-  CHECK(findPeer(peers, c.info().id).source == "shared");
-  std::cout << "  public sharing ok\n";
+  std::cout << "  public sharing (REVERTME disabled) ok\n";
 }
 
 void testBrowseAndFiles() {
