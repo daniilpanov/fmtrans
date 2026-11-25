@@ -394,6 +394,109 @@ void testConnectWithName() {
   std::cout << "  connect with name ok\n";
 }
 
+// Bug 4: connecting to oneself must be rejected.
+void testConnectToSelf() {
+  const uint16_t portA = freePort();
+  DaemonProc a("self-a", portA, "node-a");
+  CHECK(a.start());
+  CHECK(a.waitReady());
+
+  // Trying to add oneself as a peer must fail.
+  Peer self = a.describe();
+  bool threw = false;
+  try {
+    a.client().addPeer(self);
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  CHECK(threw);
+  std::cout << "  connect to self rejected ok\n";
+}
+
+// Bug 5: connecting with a name already in the list must fail.
+void testConnectDuplicateName() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("dup-a", portA, "node-a");
+  DaemonProc b("dup-b", portB, "node-b");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  // Add B once.
+  a.client().addPeer(b.describe());
+  const auto peers1 = a.client().peers();
+  CHECK(peers1.size() == 1);
+
+  // Add B again with same name but different id (simulating duplicate).
+  Peer bAgain = b.describe();
+  bAgain.id = "duplicate-id-" + bAgain.id;
+  bool threw = false;
+  try {
+    a.client().addPeer(bAgain);
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  CHECK(threw);
+  const auto peers2 = a.client().peers();
+  CHECK(peers2.size() == 1);
+  std::cout << "  connect duplicate name rejected ok\n";
+}
+
+// Bug 6: disconnect of a non-existent device must fail.
+void testDisconnectNonExistent() {
+  const uint16_t portA = freePort();
+  DaemonProc a("nonexist-a", portA, "node-a");
+  CHECK(a.start());
+  CHECK(a.waitReady());
+
+  bool threw = false;
+  try {
+    a.client().removePeer("non-existent-id-12345");
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  CHECK(threw);
+  std::cout << "  disconnect non-existent rejected ok\n";
+}
+
+// Bug 7: messages must be sent bidirectionally between connected peers.
+void testMessagesBidirectional() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("msg-bi-a", portA, "node-a");
+  DaemonProc b("msg-bi-b", portB, "node-b");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  a.client().addPeer(b.describe());
+  // After bidirectional connect, B also knows A.
+  bool found = false;
+  for (int attempt = 0; attempt < 50; ++attempt) {
+    const auto peersB = b.client().peers();
+    if (containsPeer(peersB, a.info().id)) {
+      found = true;
+      break;
+    }
+    ::usleep(50000);
+  }
+  CHECK(found);
+
+  // A sends to B.
+  DeviceClient clientB("127.0.0.1", portB);
+  clientB.sendMessage("A to B", "", a.info().id);
+  const auto messagesB = b.client().readMessages(0);
+  CHECK(messagesB.size() >= 1);
+  CHECK(messagesB[0].text == "A to B");
+
+  // B sends to A.
+  DeviceClient clientA("127.0.0.1", portA);
+  clientA.sendMessage("B to A", "", b.info().id);
+  const auto messagesA = a.client().readMessages(0);
+  CHECK(messagesA.size() >= 1);
+  CHECK(messagesA.back().text == "B to A");
+  std::cout << "  messages bidirectional ok\n";
+}
+
 }  // namespace
 
 int main() {
@@ -408,6 +511,10 @@ int main() {
   testBidirectionalConnect();
   testMessagesSendReceive();
   testConnectWithName();
+  testConnectToSelf();
+  testConnectDuplicateName();
+  testDisconnectNonExistent();
+  testMessagesBidirectional();
   if (failures == 0) {
     std::cout << "integration: all tests passed\n";
     return 0;
