@@ -325,8 +325,9 @@ void testDisconnect() {
   CHECK(a.waitReady() && b.waitReady());
 
   a.client().addPeer(b.describe());
-  a.client().removePeer(b.info().id);
-  CHECK(!containsPeer(a.client().peers(), b.info().id));
+  const std::string bId = b.info().id;
+  a.client().removePeer(bId);
+  CHECK(!containsPeer(a.client().peers(), bId));
   std::cout << "  disconnect ok\n";
 }
 
@@ -340,9 +341,18 @@ void testBidirectionalConnect() {
   CHECK(a.waitReady() && b.waitReady());
 
   a.client().addPeer(b.describe());
-  // After connect from A to B, B must also know about A.
-  const auto peersB = b.client().peers();
-  CHECK(containsPeer(peersB, a.info().id));
+  // After connect from A to B, B must also know about A. The reverse
+  // registration happens asynchronously, so retry for a short while.
+  bool found = false;
+  for (int attempt = 0; attempt < 50; ++attempt) {
+    const auto peersB = b.client().peers();
+    if (containsPeer(peersB, a.info().id)) {
+      found = true;
+      break;
+    }
+    ::usleep(50000);
+  }
+  CHECK(found);
   std::cout << "  bidirectional connect ok\n";
 }
 

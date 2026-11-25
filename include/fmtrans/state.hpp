@@ -44,6 +44,12 @@ class NodeState {
   // Resolves a relative path to an absolute path inside root (safety-checked).
   std::filesystem::path resolve(const std::string& relative) const;
 
+  // True while this node is processing a callback addPeer from a remote node.
+  // Prevents infinite recursion when two nodes connect to each other.
+  std::atomic<bool> callbackInProgress_ = false;
+
+  void setCallbackInProgress(bool v);
+
  private:
 
   LocalConfig config_;

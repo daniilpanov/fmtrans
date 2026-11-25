@@ -258,6 +258,10 @@ void NodeState::writeFile(const std::string& relative,
 #endif
 }
 
+void NodeState::setCallbackInProgress(bool v) {
+  callbackInProgress_.store(v);
+}
+
 void NodeState::subscribe(int fd) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   subscribers_.push_back(fd);
