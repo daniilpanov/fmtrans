@@ -221,6 +221,23 @@ void Daemon::handleWs(int fd, const net::HttpRequest& request) {
 bool Daemon::bind() {
   state_.load();
   saveLocalConfig(state_.config());
+
+  // При старте проверяем всех известных пиров. Недоступные удаляем из списка,
+  // чтобы они не мешали и не повторялись при следующем запуске.
+  auto peers = state_.peers();
+  for (const auto& peer : peers) {
+    try {
+      net::HttpClient client;
+      auto result = client.request("GET", peer.host, peer.port, "/api/v1/info",
+                                   {{"X-Fmtrans-Auth", peer.password}}, {}, 2000);
+      if (!result.ok) {
+        state_.removePeer(peer.id);
+      }
+    } catch (const std::exception&) {
+      state_.removePeer(peer.id);
+    }
+  }
+
   std::cout << "listening on " << state_.config().host << ":"
             << state_.config().port << std::endl;
   return server_.bind();
