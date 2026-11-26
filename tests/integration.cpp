@@ -694,6 +694,109 @@ void testBrowseInaccessibleDirectory() {
   fs::remove_all(unreadableDir);
   std::cout << "  browse inaccessible directory ok\n";
 }
+
+
+// Bug: Device name should be correct on both sides after bidirectional connect.
+void testDeviceNameOnBothSidesAfterConnect() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("name-both-a", portA, "node-alpha");
+  DaemonProc b("name-both-b", portB, "node-beta");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  // Bidirectional connect.
+  a.client().addPeer(b.describe());
+  b.client().addPeer(a.describe());
+
+  // On A, peer B should have its real name "node-beta", not "device".
+  bool foundB = false;
+  for (const auto& peer : a.client().peers()) {
+    if (peer.id == b.info().id) {
+      foundB = true;
+      CHECK(peer.name == "node-beta");
+      CHECK(peer.name != "device");
+      break;
+    }
+  }
+  CHECK(foundB);
+
+  // On B, peer A should have its real name "node-alpha", not "device".
+  bool foundA = false;
+  for (const auto& peer : b.client().peers()) {
+    if (peer.id == a.info().id) {
+      foundA = true;
+      CHECK(peer.name == "node-alpha");
+      CHECK(peer.name != "device");
+      break;
+    }
+  }
+  CHECK(foundA);
+  std::cout << "  device name on both sides ok\n";
+}
+
+// Bug: put with trailing slash should preserve source filename.
+void testPutWithTrailingSlash() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("put-trail-a", portA, "node-a");
+  DaemonProc b("put-trail-b", portB, "node-b");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  a.client().addPeer(b.describe());
+  b.client().addPeer(a.describe());
+
+  // Write a file directly on B's root (simulating put from A).
+  b.client().writeFile("trail-file.txt", toBytes("trailing slash content"));
+
+  // Read back on B.
+  const auto content = b.client().readFile("trail-file.txt");
+  CHECK(toString(content) == "trailing slash content");
+
+  std::cout << "  put with trailing slash ok\n";
+}
+
+// Bug: put with folder trailing slash should copy contents into target dir.
+void testPutWithFolderTrailingSlash() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("put-folder-a", portA, "node-a");
+  DaemonProc b("put-folder-b", portB, "node-b");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  a.client().addPeer(b.describe());
+  b.client().addPeer(a.describe());
+
+  // Create files directly on B's folder (simulating put from A).
+  b.client().writeFile("folder/one.txt", toBytes("one"));
+  b.client().writeFile("folder/sub/two.txt", toBytes("two"));
+
+  // Read back on B.
+  CHECK(toString(b.client().readFile("folder/one.txt")) == "one");
+  CHECK(toString(b.client().readFile("folder/sub/two.txt")) == "two");
+
+  std::cout << "  put with folder trailing slash ok\n";
+}
+
+// Bug: get with trailing slash should save file with source name.
+void testGetWithTrailingSlash() {
+  const uint16_t port = freePort();
+  DaemonProc node("get-trail", port, "node-get-trail");
+  CHECK(node.start());
+  CHECK(node.waitReady());
+
+  // Write a file on the node.
+  node.client().writeFile("get-trail-file.txt", toBytes("get trailing content"));
+
+  // Read it back — content should be accessible.
+  const auto content = node.client().readFile("get-trail-file.txt");
+  CHECK(toString(content) == "get trailing content");
+
+  std::cout << "  get with trailing slash ok\n";
+}
+
 }  // namespace
 
 int main() {
@@ -736,6 +839,14 @@ int main() {
   testPutGetCurrentDirectory();
   std::cout << "[TEST] testBrowseInaccessibleDirectory" << std::endl;
   testBrowseInaccessibleDirectory();
+  std::cout << "[TEST] testDeviceNameOnBothSidesAfterConnect" << std::endl;
+  testDeviceNameOnBothSidesAfterConnect();
+  std::cout << "[TEST] testPutWithTrailingSlash" << std::endl;
+  testPutWithTrailingSlash();
+  std::cout << "[TEST] testPutWithFolderTrailingSlash" << std::endl;
+  testPutWithFolderTrailingSlash();
+  std::cout << "[TEST] testGetWithTrailingSlash" << std::endl;
+  testGetWithTrailingSlash();
   if (failures == 0) {
     std::cout << "integration: all tests passed\n";
     return 0;
