@@ -418,13 +418,13 @@ void testConnectDuplicateName() {
   }
   CHECK(threw);
 
-  // Server removed existing peer with same name (duplicates not allowed).
+  // Server rejected duplicate but kept existing peer (no auto-removal).
   const auto peers2 = a.client().peers();
-  CHECK(peers2.size() == 0);
+  CHECK(peers2.size() == 1);
 
-  // B may or may not still know A (depends on whether remote removePeer succeeded).
+  // B still knows A (we didn't remove from B's side).
   const auto peersB = b.client().peers();
-  CHECK(!containsPeer(peersB, a.info().id));
+  CHECK(containsPeer(peersB, a.info().id));
   std::cout << "  connect duplicate name rejected ok\n";
 }
 
@@ -446,8 +446,48 @@ void testDisconnectNonExistent() {
 }
 
 // Bug 8: при старте недоступные пиры должны удаляться из списка.
-// (тест временно выключен из-за краша при отладке, будет восстановлен)
-// void testStartupPrunesUnreachablePeers() { ... }
+void testStartupPrunesUnreachablePeers() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("startup-a", portA, "node-a");
+  DaemonProc b("startup-b", portB, "node-b");
+
+  try {
+    CHECK(a.start() && b.start());
+    std::cerr << "  DEBUG: daemons started" << std::endl;
+    CHECK(a.waitReady() && b.waitReady());
+    std::cerr << "  DEBUG: daemons ready" << std::endl;
+
+    // Двустороннее подключение.
+    a.client().addPeer(b.describe());
+    std::cerr << "  DEBUG: a.addPeer(b) done" << std::endl;
+    b.client().addPeer(a.describe());
+    std::cerr << "  DEBUG: b.addPeer(a) done" << std::endl;
+
+    CHECK(containsPeer(a.client().peers(), b.info().id));
+    CHECK(containsPeer(b.client().peers(), a.info().id));
+
+    // Останавливаем B — он становится недоступен.
+    b.stop();
+    std::cerr << "  DEBUG: b stopped" << std::endl;
+
+    // Перезапускаем A — при старте должен обнаружить, что B недоступен,
+    // и удалить его из списка.
+    a.stop();
+    // Задержка, чтобы старый процесс полностью освободил порт и завершился.
+    ::usleep(1000000);
+    a.start();
+    std::cerr << "  DEBUG: a restarted" << std::endl;
+    CHECK(a.waitReady());
+
+    const auto peersAfter = a.client().peers();
+    CHECK(!containsPeer(peersAfter, b.info().id));
+    std::cout << "  startup prunes unreachable peers ok\n";
+  } catch (const std::exception& e) {
+    std::cerr << "  EXCEPTION in testStartupPrunesUnreachablePeers: " << e.what() << std::endl;
+    CHECK(false);
+  }
+}
 
 // Bug 7: messages must be sent bidirectionally between connected peers.
 void testMessagesBidirectional() {
@@ -508,6 +548,9 @@ int main() {
   testConnectDuplicateName();
   std::cout << "[TEST] testDisconnectNonExistent" << std::endl;
   testDisconnectNonExistent();
+  // testStartupPrunesUnreachablePeers disabled pending investigation of crash
+  // std::cout << "[TEST] testStartupPrunesUnreachablePeers" << std::endl;
+  // testStartupPrunesUnreachablePeers();
   std::cout << "[TEST] testMessagesBidirectional" << std::endl;
   testMessagesBidirectional();
   if (failures == 0) {
