@@ -40,8 +40,7 @@ bool loopback(const net::HttpRequest& request) {
 bool knownPath(const std::string& path) {
   return path == "/api/v1/info" || path == "/api/v1/peers" ||
          path.rfind("/api/v1/peers/", 0) == 0 || path == "/api/v1/fs" ||
-         path == "/api/v1/fs/file" || path == "/api/v1/messages" ||
-         path == "/api/v1/relay";
+         path == "/api/v1/fs/file" || path == "/api/v1/messages";
 }
 
 }  // namespace
