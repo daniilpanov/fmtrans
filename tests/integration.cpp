@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -586,6 +587,119 @@ void testMessagesBidirectional() {
   std::cout << "  messages bidirectional ok\n";
 }
 
+// Bug: Device name should not default to "device" when --name is provided.
+void testDeviceNameNotDefault() {
+  const uint16_t port = freePort();
+  DaemonProc node("name-not-default", port, "my-special-name");
+  CHECK(node.start());
+  CHECK(node.waitReady());
+  const DeviceInfo info = node.info();
+  CHECK(info.name == "my-special-name");
+  CHECK(info.name != "device");
+  std::cout << "  device name not default ok\n";
+}
+
+// Bug: Messages must have proper `to` field and be filterable by recipient.
+// When A sends to B, B must see messages addressed to B, not A's own messages.
+void testMessagesFilteredByRecipient() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("msg-filt-a", portA, "node-a");
+  DaemonProc b("msg-filt-b", portB, "node-b");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  a.client().addPeer(b.describe());
+  b.client().addPeer(a.describe());
+
+  // A sends a message TO B (using B's id as `to`).
+  DeviceClient clientB("127.0.0.1", portB);
+  clientB.sendMessage("private to B", "", b.info().id);
+  const auto messagesB = b.client().readMessages(0);
+  CHECK(messagesB.size() >= 1);
+  bool found = false;
+  for (const auto& m : messagesB) {
+    if (m.text == "private to B" && m.to == b.info().id) {
+      found = true;
+      break;
+    }
+  }
+  CHECK(found);
+
+  // A sends a message to itself (to = A's id). B must NOT see it.
+  DeviceClient clientA("127.0.0.1", portA);
+  clientA.sendMessage("private to A", "", a.info().id);
+  const auto messagesB2 = b.client().readMessages(0);
+  bool foundOnB = false;
+  for (const auto& m : messagesB2) {
+    if (m.text == "private to A") {
+      foundOnB = true;
+      break;
+    }
+  }
+  CHECK(!foundOnB);
+  std::cout << "  messages filtered by recipient ok\n";
+}
+
+// Bug: put/get with "./" (current directory) as remote path.
+void testPutGetCurrentDirectory() {
+  const uint16_t port = freePort();
+  DaemonProc node("curdir", port, "node-curdir");
+  CHECK(node.start());
+  CHECK(node.waitReady());
+
+  const std::string localFile = "/tmp/fmtrans-test-curdir-file.txt";
+  {
+    std::ofstream output(localFile);
+    output << "curdir content";
+  }
+  node.client().writeFile("curdir-test.txt", toBytes("direct write"));
+
+  const auto content = node.client().readFile("curdir-test.txt");
+  CHECK(toString(content) == "curdir content");
+
+  const auto root = node.client().browse("");
+  bool found = false;
+  for (const auto& entry : root) {
+    if (entry.name == "curdir-test.txt") { found = true; break; }
+  }
+  CHECK(found);
+
+  ::unlink(localFile.c_str());
+  std::cout << "  put/get current directory ok\n";
+}
+
+// Bug: browse must not crash when a subdirectory is unreadable.
+void testBrowseInaccessibleDirectory() {
+  const uint16_t port = freePort();
+  DaemonProc node("browse-perm", port, "node-browse-perm");
+  CHECK(node.start());
+  CHECK(node.waitReady());
+
+  node.client().writeFile("readable.txt", toBytes("hello"));
+  const fs::path unreadableDir = fs::path(node.root()) / "unreadable";
+  fs::create_directories(unreadableDir);
+  ::chmod(unreadableDir.c_str(), 0000);
+
+  bool threw = false;
+  std::vector<FileEntry> entries;
+  try {
+    entries = node.client().browse("");
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  CHECK(!threw);
+
+  bool foundReadable = false;
+  for (const auto& entry : entries) {
+    if (entry.name == "readable.txt") { foundReadable = true; break; }
+  }
+  CHECK(foundReadable);
+
+  ::chmod(unreadableDir.c_str(), 0755);
+  fs::remove_all(unreadableDir);
+  std::cout << "  browse inaccessible directory ok\n";
+}
 }  // namespace
 
 int main() {
@@ -620,6 +734,14 @@ int main() {
   testMessagesBidirectional();
   std::cout << "[TEST] testReconnectSameDeviceAfterRestart" << std::endl;
   testReconnectSameDeviceAfterRestart();
+  std::cout << "[TEST] testDeviceNameNotDefault" << std::endl;
+  testDeviceNameNotDefault();
+  std::cout << "[TEST] testMessagesFilteredByRecipient" << std::endl;
+  testMessagesFilteredByRecipient();
+  std::cout << "[TEST] testPutGetCurrentDirectory" << std::endl;
+  testPutGetCurrentDirectory();
+  std::cout << "[TEST] testBrowseInaccessibleDirectory" << std::endl;
+  testBrowseInaccessibleDirectory();
   if (failures == 0) {
     std::cout << "integration: all tests passed\n";
     return 0;
