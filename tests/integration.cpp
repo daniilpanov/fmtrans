@@ -614,7 +614,7 @@ void testMessagesFilteredByRecipient() {
 
   // A sends a message TO B (using B's id as `to`).
   DeviceClient clientB("127.0.0.1", portB);
-  clientB.sendMessage("private to B", "", b.info().id);
+  clientB.sendMessage("private to B", b.info().id, a.info().id);
   const auto messagesB = b.client().readMessages(0);
   CHECK(messagesB.size() >= 1);
   bool found = false;
@@ -628,7 +628,7 @@ void testMessagesFilteredByRecipient() {
 
   // A sends a message to itself (to = A's id). B must NOT see it.
   DeviceClient clientA("127.0.0.1", portA);
-  clientA.sendMessage("private to A", "", a.info().id);
+  clientA.sendMessage("private to A", a.info().id, a.info().id);
   const auto messagesB2 = b.client().readMessages(0);
   bool foundOnB = false;
   for (const auto& m : messagesB2) {
@@ -648,12 +648,8 @@ void testPutGetCurrentDirectory() {
   CHECK(node.start());
   CHECK(node.waitReady());
 
-  const std::string localFile = "/tmp/fmtrans-test-curdir-file.txt";
-  {
-    std::ofstream output(localFile);
-    output << "curdir content";
-  }
-  node.client().writeFile("curdir-test.txt", toBytes("direct write"));
+  // Writing with "./" prefix should work the same as without it.
+  node.client().writeFile("./curdir-test.txt", toBytes("curdir content"));
 
   const auto content = node.client().readFile("curdir-test.txt");
   CHECK(toString(content) == "curdir content");
@@ -664,8 +660,6 @@ void testPutGetCurrentDirectory() {
     if (entry.name == "curdir-test.txt") { found = true; break; }
   }
   CHECK(found);
-
-  ::unlink(localFile.c_str());
   std::cout << "  put/get current directory ok\n";
 }
 

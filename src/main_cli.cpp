@@ -117,7 +117,10 @@ Target resolveTarget(const std::string& key, const LocalConfig& config,
 std::string trimPath(const std::string& path) {
   size_t begin = 0;
   while (begin < path.size() && path[begin] == '/') ++begin;
-  return path.substr(begin);
+  std::string result = path.substr(begin);
+  // Normalize "." and "./" to empty (root directory).
+  if (result == "." || result == "./") return "";
+  return result;
 }
 
 std::string joinPath(const std::string& base, const std::string& name) {
@@ -474,7 +477,8 @@ int main(int argc, char** argv) {
       const Target target = resolveTarget(arg(1), config, local);
       std::string text = arg(2);
       for (size_t i = 3; i < args.positional.size(); ++i) text += " " + args.positional[i];
-      target.device->sendMessage(text, args.get("to"), local.info().id);
+      const std::string toDeviceId = target.device->info().id;
+      target.device->sendMessage(text, toDeviceId, local.info().id);
       std::cout << "Сообщение отправлено.\n";
       return 0;
     }
