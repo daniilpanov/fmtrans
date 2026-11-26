@@ -490,6 +490,60 @@ void testStartupPrunesUnreachablePeers() {
 }
 
 // Bug 7: messages must be sent bidirectionally between connected peers.
+// Баг: при повторном подключении того же устройства после перезапуска
+// сервер отвергает по имени, не проверяя сначала адрес.
+// Ожидаемое поведение: если имя и адрес совпадают с существующим пиром —
+// это то же устройство, ошибка быть не должно.
+void testReconnectSameDeviceAfterRestart() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("recon-a", portA, "node-a");
+  DaemonProc b("recon-b", portB, "node-b");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  // Подключаем bidirectional.
+  a.client().addPeer(b.describe());
+  b.client().addPeer(a.describe());
+  CHECK(containsPeer(a.client().peers(), b.info().id));
+  CHECK(containsPeer(b.client().peers(), a.info().id));
+
+  // Останавливаем b.
+  b.stop();
+  ::usleep(500000);
+
+  // Перезапускаем b с тем же именем и портом.
+  b.start();
+  CHECK(b.waitReady());
+
+  // Повторное подключение a к b не должно вызывать ошибку дубликата имени,
+  // т.к. это то же самое устройство (тот же IP:port).
+  bool threw = false;
+  try {
+    a.client().addPeer(b.describe());
+  } catch (const std::exception& e) {
+    threw = true;
+    std::cerr << "  EXCEPTION on reconnect: " << e.what() << std::endl;
+  }
+  CHECK(!threw);
+
+  // Проверяем, что нет дубляжа устройства в списке.
+  const auto peers = a.client().peers();
+  int deltaCount = 0;
+  for (const auto& p : peers) {
+    if (p.name == "node-b") deltaCount++;
+  }
+  CHECK(deltaCount == 1);
+
+  // Сообщения должны работать после переподключения.
+  DeviceClient clientB("127.0.0.1", portB);
+  clientB.sendMessage("after restart", "", a.info().id);
+  const auto messagesB = b.client().readMessages(0);
+  CHECK(messagesB.size() >= 1);
+  CHECK(messagesB[0].text == "after restart");
+  std::cout << "  reconnect same device after restart ok\n";
+}
+
 void testMessagesBidirectional() {
   const uint16_t portA = freePort();
   const uint16_t portB = freePort();
@@ -552,6 +606,8 @@ int main() {
   testStartupPrunesUnreachablePeers();
   std::cout << "[TEST] testMessagesBidirectional" << std::endl;
   testMessagesBidirectional();
+  std::cout << "[TEST] testReconnectSameDeviceAfterRestart" << std::endl;
+  testReconnectSameDeviceAfterRestart();
   if (failures == 0) {
     std::cout << "integration: all tests passed\n";
     return 0;
