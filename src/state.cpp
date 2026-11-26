@@ -187,23 +187,35 @@ std::vector<FileEntry> NodeState::browse(const std::string& relative) const {
   if (!fs::is_directory(target)) throw Error("not a directory: " + relative);
 
   std::vector<FileEntry> entries;
-  for (const auto& item : fs::directory_iterator(target)) {
-    FileEntry entry;
-    entry.name = item.path().filename().string();
-    const bool isDir = item.is_directory();
-    entry.type = isDir ? "dir" : "file";
-    if (!isDir) entry.size = item.file_size();
-    const auto modified = item.last_write_time();
-    const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
-                             modified.time_since_epoch())
-                             .count();
-    std::time_t time = static_cast<std::time_t>(seconds);
-    std::tm tm{};
-    gmtime_r(&time, &tm);
-    char buffer[32];
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &tm);
-    entry.mtime = buffer;
-    entries.push_back(entry);
+  // Iterate directory entries; skip inaccessible items instead of crashing.
+  std::error_code ec;
+  for (const auto& item : fs::directory_iterator(target, ec)) {
+    if (ec) break;  // Cannot iterate further (e.g. root dir became inaccessible).
+    try {
+      FileEntry entry;
+      entry.name = item.path().filename().string();
+      const bool isDir = item.is_directory(ec);
+      if (ec) continue;  // Skip inaccessible item.
+      entry.type = isDir ? "dir" : "file";
+      if (!isDir) entry.size = item.file_size(ec);
+      if (ec) continue;
+      const auto modified = item.last_write_time(ec);
+      if (ec) continue;
+      const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                               modified.time_since_epoch())
+                               .count();
+      std::time_t time = static_cast<std::time_t>(seconds);
+      std::tm tm{};
+      gmtime_r(&time, &tm);
+      char buffer[32];
+      std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &tm);
+      entry.mtime = buffer;
+      entries.push_back(entry);
+    } catch (const std::exception&) {
+      // Skip any single inaccessible entry.
+      continue;
+    }
+    ec.clear();
   }
   std::sort(entries.begin(), entries.end(), [](const FileEntry& a, const FileEntry& b) {
     if (a.type != b.type) return a.type == "dir";
