@@ -395,10 +395,14 @@ int main(int argc, char** argv) {
       peer.id = info.id;
       local.addPeer(peer);
       // Обратное подключение: регистрируем локальное устройство на удалённом,
-      // чтобы связь была двусторонней.
+      // чтобы связь была двусторонней. Используем данные ЛОКАЛЬНОГО устройства,
+      // а не удалённого — иначе удалённое устройство получит addPeer со своим
+      // собственным идентификатором и откажет ("cannot add self as peer").
+      const DeviceInfo localInfo = local.info();
       Peer localPeer;
-      localPeer.id = info.id;
-      localPeer.name = info.name;
+      localPeer.id = localInfo.id;
+      localPeer.name = localInfo.name;
+      localPeer.publicAccess = localInfo.publicAccess;
       localPeer.host = config.host;
       localPeer.port = config.port;
       localPeer.password = config.password;
