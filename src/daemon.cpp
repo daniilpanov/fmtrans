@@ -89,48 +89,31 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request,
       if (peer.host.empty() || peer.port == 0) {
         return error(400, "host and port are required");
       }
-      DeviceClient probe(peer.host, peer.port, peer.password);
-      const DeviceInfo remote = probe.info();
-      if (peer.id.empty()) peer.id = remote.id;
-      if (peer.name.empty()) peer.name = remote.name;
-      peer.publicAccess = peer.password.empty() && remote.publicAccess;
+      // Используем данные из запроса, не делаем лишних HTTP вызовов
+      // к удалённому устройству (избегаем рекурсии).
       peer.source = "direct";
+
+      // Проверка дубликата имени: если имя уже есть в списке подключений,
+      // сбрасываем соединение с обеих сторон и возвращаем ошибку.
+      if (!peer.name.empty()) {
+        if (auto existing = state_.findPeerByName(peer.name)) {
+          // Удаляем существующего пира локально
+          state_.removePeer(existing->id);
+          // Уведомляем удалённое устройство, чтобы оно тоже удалило нас
+          try {
+            DeviceClient remoteClient(existing->host, existing->port,
+                                      existing->password);
+            remoteClient.removePeer(state_.info().id);
+          } catch (const std::exception&) {
+            // Если удалённое устройство недоступно — не критично.
+          }
+          return error(400, "устройство с именем '" + peer.name +
+                       "' уже есть в списке подключений");
+        }
+      }
+
       state_.addPeer(peer);
 
-      // Register the local device on the remote device so the connection is
-      // bidirectional: the remote device also knows about us. The remote
-      // device calls back, but callbackInProgress_ prevents infinite recursion.
-      if (!state_.callbackInProgress_) {
-        Peer localPeer;
-        localPeer.id = state_.info().id;
-        localPeer.name = state_.info().name;
-        localPeer.host = state_.config().host;
-        localPeer.port = state_.config().port;
-        localPeer.password = state_.config().password;
-        localPeer.source = "direct";
-        state_.setCallbackInProgress(true);
-        {
-          DeviceClient remoteClient(peer.host, peer.port, peer.password);
-          remoteClient.addPeer(localPeer);
-        }
-        state_.setCallbackInProgress(false);
-      }
-
-      // REVERTME: temporarily disable auto-sharing to prevent self-connection.
-      // Re-enable after single source of truth is implemented.
-      if (false) {
-        // Share the remote peer's public, directly-connected devices (one hop only).
-        for (const Peer& candidate : probe.peers()) {
-          if (!candidate.publicAccess || candidate.source != "direct") continue;
-          if (candidate.id == state_.info().id) continue;
-          if (candidate.host == state_.config().host && candidate.port == state_.config().port) {
-            continue;
-          }
-          Peer shared = candidate;
-          shared.source = "shared";
-          state_.addPeer(shared);
-        }
-      }
       return net::HttpResponse::json(200, success(peer.toJson(!loopback(request))).dump());
     }
 
@@ -142,30 +125,6 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request,
         return error(404, "peer not found: " + id);
       }
       state_.removePeer(id);
-
-      // Обратный отключ: уведомляем удалённое устройство, чтобы оно тоже
-      // удалило нас из своего списка. Callback-protection предотвращает
-      // бесконечную рекурсию.
-      if (!state_.callbackInProgress_) {
-        Peer localPeer;
-        localPeer.id = state_.info().id;
-        localPeer.name = state_.info().name;
-        localPeer.host = state_.config().host;
-        localPeer.port = state_.config().port;
-        localPeer.password = state_.config().password;
-        localPeer.source = "direct";
-        state_.setCallbackInProgress(true);
-        {
-          DeviceClient remoteClient(peerOpt->host, peerOpt->port,
-                                    peerOpt->password);
-          try {
-            remoteClient.removePeer(localPeer.id);
-          } catch (const std::exception&) {
-            // Лучше всего по 가능ности: удалённое может быть недоступно.
-          }
-        }
-        state_.setCallbackInProgress(false);
-      }
 
       return net::HttpResponse::json(200, success().dump());
     }

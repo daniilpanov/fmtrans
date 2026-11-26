@@ -303,33 +303,12 @@ void testDisconnect() {
   CHECK(a.start() && b.start());
   CHECK(a.waitReady() && b.waitReady());
 
+  // Двустороннее подключение: обе стороны добавляют друг друга
   a.client().addPeer(b.describe());
-  // Обратный коннект: B тоже знает про A
-  bool found = false;
-  for (int attempt = 0; attempt < 50; ++attempt) {
-    const auto peersB = b.client().peers();
-    if (containsPeer(peersB, a.info().id)) {
-      found = true;
-      break;
-    }
-    ::usleep(50000);
-  }
-  CHECK(found);
+  b.client().addPeer(a.describe());
 
   a.client().removePeer(b.info().id);
   CHECK(!containsPeer(a.client().peers(), b.info().id));
-
-  // Обратный отключ: B тоже должен удалить A из своего списка
-  found = false;
-  for (int attempt = 0; attempt < 50; ++attempt) {
-    const auto peersB = b.client().peers();
-    if (!containsPeer(peersB, a.info().id)) {
-      found = true;
-      break;
-    }
-    ::usleep(50000);
-  }
-  CHECK(found);
   std::cout << "  disconnect ok\n";
 }
 
@@ -342,19 +321,13 @@ void testBidirectionalConnect() {
   CHECK(a.start() && b.start());
   CHECK(a.waitReady() && b.waitReady());
 
+  // Двустороннее подключение: обе стороны добавляют друга друга.
+  // Сервер не делает обратных вызовов, поэтому это делается явно.
   a.client().addPeer(b.describe());
-  // After connect from A to B, B must also know about A. The reverse
-  // registration happens asynchronously, so retry for a short while.
-  bool found = false;
-  for (int attempt = 0; attempt < 50; ++attempt) {
-    const auto peersB = b.client().peers();
-    if (containsPeer(peersB, a.info().id)) {
-      found = true;
-      break;
-    }
-    ::usleep(50000);
-  }
-  CHECK(found);
+  b.client().addPeer(a.describe());
+
+  CHECK(containsPeer(a.client().peers(), b.info().id));
+  CHECK(containsPeer(b.client().peers(), a.info().id));
   std::cout << "  bidirectional connect ok\n";
 }
 
@@ -428,8 +401,13 @@ void testConnectDuplicateName() {
   a.client().addPeer(b.describe());
   const auto peers1 = a.client().peers();
   CHECK(peers1.size() == 1);
+  // Add B back so both know each other.
+  b.client().addPeer(a.describe());
+  const auto peers1b = b.client().peers();
+  CHECK(peers1b.size() == 1);
 
   // Add B again with same name but different id (simulating duplicate).
+  // This should throw AND reset connection (server removes existing peer).
   Peer bAgain = b.describe();
   bAgain.id = "duplicate-id-" + bAgain.id;
   bool threw = false;
@@ -439,8 +417,14 @@ void testConnectDuplicateName() {
     threw = true;
   }
   CHECK(threw);
+
+  // Server removed existing peer with same name (duplicates not allowed).
   const auto peers2 = a.client().peers();
-  CHECK(peers2.size() == 1);
+  CHECK(peers2.size() == 0);
+
+  // B may or may not still know A (depends on whether remote removePeer succeeded).
+  const auto peersB = b.client().peers();
+  CHECK(!containsPeer(peersB, a.info().id));
   std::cout << "  connect duplicate name rejected ok\n";
 }
 
@@ -474,18 +458,11 @@ void testMessagesBidirectional() {
   CHECK(a.start() && b.start());
   CHECK(a.waitReady() && b.waitReady());
 
+  // Двустороннее подключение: обе стороны добавляют друга друга.
   a.client().addPeer(b.describe());
-  // After bidirectional connect, B also knows A.
-  bool found = false;
-  for (int attempt = 0; attempt < 50; ++attempt) {
-    const auto peersB = b.client().peers();
-    if (containsPeer(peersB, a.info().id)) {
-      found = true;
-      break;
-    }
-    ::usleep(50000);
-  }
-  CHECK(found);
+  b.client().addPeer(a.describe());
+  CHECK(containsPeer(a.client().peers(), b.info().id));
+  CHECK(containsPeer(b.client().peers(), a.info().id));
 
   // A sends to B.
   DeviceClient clientB("127.0.0.1", portB);
@@ -507,18 +484,31 @@ void testMessagesBidirectional() {
 
 int main() {
   std::cout << "integration tests\n";
+  std::cout << "[TEST] testInfoAndLocalParity" << std::endl;
   testInfoAndLocalParity();
+  std::cout << "[TEST] testConnectAndPassword" << std::endl;
   testConnectAndPassword();
+  std::cout << "[TEST] testPublicSharing" << std::endl;
   testPublicSharing();
+  std::cout << "[TEST] testBrowseAndFiles" << std::endl;
   testBrowseAndFiles();
+  std::cout << "[TEST] testMessagesAndWebSocket" << std::endl;
   testMessagesAndWebSocket();
+  std::cout << "[TEST] testDisconnect" << std::endl;
   testDisconnect();
+  std::cout << "[TEST] testBidirectionalConnect" << std::endl;
   testBidirectionalConnect();
+  std::cout << "[TEST] testMessagesSendReceive" << std::endl;
   testMessagesSendReceive();
+  std::cout << "[TEST] testConnectWithName" << std::endl;
   testConnectWithName();
+  std::cout << "[TEST] testConnectToSelf" << std::endl;
   testConnectToSelf();
+  std::cout << "[TEST] testConnectDuplicateName" << std::endl;
   testConnectDuplicateName();
+  std::cout << "[TEST] testDisconnectNonExistent" << std::endl;
   testDisconnectNonExistent();
+  std::cout << "[TEST] testMessagesBidirectional" << std::endl;
   testMessagesBidirectional();
   if (failures == 0) {
     std::cout << "integration: all tests passed\n";

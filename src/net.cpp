@@ -673,29 +673,35 @@ bool HttpServer::serve() {
     char peerBuf[INET_ADDRSTRLEN] = {0};
     ::inet_ntop(AF_INET, &peer.sin_addr, peerBuf, sizeof(peerBuf));
     std::thread([handler, wsHandler, fd, peerBuf]() {
-      Socket socket(fd);
-      auto request = readRequest(socket);
-      if (!request) return;
-      request->peer = peerBuf;
-      if (request->tooLarge) {
-        socket.sendAll(HttpResponse::text(413, "payload too large").serialize());
-        return;
-      }
-      if (wsHandler && request->path == "/ws") {
-        wsHandler(socket.release(), *request);
-        return;
-      }
-      const HttpResponse response = handler(*request, socket);
-      const Bytes headers = response.serializeHeaders();
-      if (!socket.sendAll(headers)) return;
-      if (response.bodyStream) {
-        Bytes chunk;
-        while (response.bodyStream(chunk)) {
-          if (!socket.sendAll(chunk)) return;
-          chunk.clear();
+      try {
+        Socket socket(fd);
+        auto request = readRequest(socket);
+        if (!request) return;
+        request->peer = peerBuf;
+        if (request->tooLarge) {
+          socket.sendAll(HttpResponse::text(413, "payload too large").serialize());
+          return;
         }
-      } else {
-        socket.sendAll(response.body);
+        if (wsHandler && request->path == "/ws") {
+          wsHandler(socket.release(), *request);
+          return;
+        }
+        const HttpResponse response = handler(*request, socket);
+        const Bytes headers = response.serializeHeaders();
+        if (!socket.sendAll(headers)) return;
+        if (response.bodyStream) {
+          Bytes chunk;
+          while (response.bodyStream(chunk)) {
+            if (!socket.sendAll(chunk)) return;
+            chunk.clear();
+          }
+        } else {
+          socket.sendAll(response.body);
+        }
+      } catch (const std::exception& exception) {
+        std::cerr << "serve thread: caught exception: " << exception.what() << std::endl;
+      } catch (...) {
+        std::cerr << "serve thread: caught unknown exception" << std::endl;
       }
     }).detach();
   }

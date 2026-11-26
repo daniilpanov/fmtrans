@@ -27,6 +27,7 @@ class NodeState {
   void addPeer(const Peer& peer);
   void removePeer(const std::string& id);
   std::optional<Peer> findPeer(const std::string& key) const;
+  std::optional<Peer> findPeerByName(const std::string& name) const;
 
   std::vector<Message> messagesSince(uint64_t since) const;
   uint64_t addMessage(const std::string& from, const std::string& to,
