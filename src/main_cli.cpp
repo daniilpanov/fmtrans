@@ -396,6 +396,7 @@ int main(int argc, char** argv) {
       const DeviceInfo info = DeviceClient(peer.host, peer.port, peer.password).info();
       if (peer.name.empty()) peer.name = info.name;
       peer.id = info.id;
+      peer.publicAccess = info.publicAccess;
       local.addPeer(peer);
       // Обратное подключение: регистрируем локальное устройство на удалённом,
       // чтобы связь была двусторонней. Используем данные ЛОКАЛЬНОГО устройства,
