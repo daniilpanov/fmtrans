@@ -389,9 +389,10 @@ int main(int argc, char** argv) {
       peer.port = static_cast<uint16_t>(std::stoul(address.substr(colon + 1)));
       peer.password = args.get("password");
       peer.source = "direct";
-      // Сначала получаем информацию об устройстве, чтобы знать его настоящее имя.
+      // Сначала получаем информацию об устройстве, чтобы знать его настоящее имя и идентификатор.
       const DeviceInfo info = DeviceClient(peer.host, peer.port, peer.password).info();
       if (peer.name.empty()) peer.name = info.name;
+      peer.id = info.id;
       local.addPeer(peer);
       // Обратное подключение: регистрируем локальное устройство на удалённом,
       // чтобы связь была двусторонней.

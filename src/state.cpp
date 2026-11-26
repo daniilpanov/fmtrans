@@ -109,7 +109,7 @@ void NodeState::removePeer(const std::string& id) {
                                  return peer.id == id || peer.name == id ||
                                         peer.address() == id;
                                });
-  if (it == peers_.end()) throw Error("peer not found: " + id);
+  if (it == peers_.end()) return;
   peers_.erase(it);
   save();
 }

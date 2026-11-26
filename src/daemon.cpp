@@ -89,24 +89,12 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request,
       if (peer.host.empty() || peer.port == 0) {
         return error(400, "host and port are required");
       }
-      // Используем данные из запроса, не делаем лишних HTTP вызовов
-      // к удалённому устройству (избегаем рекурсии).
       peer.source = "direct";
 
       // Проверка дубликата имени: если имя уже есть в списке подключений,
-      // сбрасываем соединение с обеих сторон и возвращаем ошибку.
+      // возвращаем ошибку.
       if (!peer.name.empty()) {
         if (auto existing = state_.findPeerByName(peer.name)) {
-          // Удаляем существующего пира локально
-          state_.removePeer(existing->id);
-          // Уведомляем удалённое устройство, чтобы оно тоже удалило нас
-          try {
-            DeviceClient remoteClient(existing->host, existing->port,
-                                      existing->password);
-            remoteClient.removePeer(state_.info().id);
-          } catch (const std::exception&) {
-            // Если удалённое устройство недоступно — не критично.
-          }
           return error(400, "устройство с именем '" + peer.name +
                        "' уже есть в списке подключений");
         }
@@ -207,23 +195,33 @@ void Daemon::handleWs(int fd, const net::HttpRequest& request) {
 }
 
 bool Daemon::bind() {
-  state_.load();
+  try {
+    state_.load();
+  } catch (const std::exception&) {
+    // If state.json is corrupted, we can't easily reset state_ (it has atomic
+    // members that can't be assigned). The load() method catches parse errors
+    // internally, so this catch is just a safety net.
+  }
   saveLocalConfig(state_.config());
 
   // При старте проверяем всех известных пиров. Недоступные удаляем из списка,
   // чтобы они не мешали и не повторялись при следующем запуске.
-  auto peers = state_.peers();
-  for (const auto& peer : peers) {
-    try {
-      net::HttpClient client;
-      auto result = client.request("GET", peer.host, peer.port, "/api/v1/info",
-                                   {{"X-Fmtrans-Auth", peer.password}}, {}, 2000);
-      if (!result.ok) {
+  try {
+    auto peers = state_.peers();
+    for (const auto& peer : peers) {
+      try {
+        net::HttpClient client;
+        auto result = client.request("GET", peer.host, peer.port, "/api/v1/info",
+                                     {{"X-Fmtrans-Auth", peer.password}}, {}, 2000);
+        if (!result.ok) {
+          state_.removePeer(peer.id);
+        }
+      } catch (const std::exception&) {
         state_.removePeer(peer.id);
       }
-    } catch (const std::exception&) {
-      state_.removePeer(peer.id);
     }
+  } catch (const std::exception&) {
+    // If anything goes wrong during pruning, continue with whatever peers we have.
   }
 
   std::cout << "listening on " << state_.config().host << ":"
