@@ -388,16 +388,52 @@ int main(int argc, char** argv) {
       peer.host = address.substr(0, colon);
       peer.port = static_cast<uint16_t>(std::stoul(address.substr(colon + 1)));
       peer.password = args.get("password");
-      peer.name = args.get("name");
       peer.source = "direct";
-      local.addPeer(peer);
+      // Сначала получаем информацию об устройстве, чтобы знать его настоящее имя.
       const DeviceInfo info = DeviceClient(peer.host, peer.port, peer.password).info();
+      if (peer.name.empty()) peer.name = info.name;
+      local.addPeer(peer);
+      // Обратное подключение: регистрируем локальное устройство на удалённом,
+      // чтобы связь была двусторонней.
+      Peer localPeer;
+      localPeer.id = info.id;
+      localPeer.name = info.name;
+      localPeer.host = config.host;
+      localPeer.port = config.port;
+      localPeer.password = config.password;
+      localPeer.source = "direct";
+      try {
+        DeviceClient(peer.host, peer.port, peer.password).addPeer(localPeer);
+      } catch (const std::exception&) {
+        // Если удалённое устройство уже знает о нас, или имя занято —
+        // это не критично — локальное подключение уже установлено.
+      }
       std::cout << "Подключено: " << info.name << " (" << address << ")\n";
       return 0;
     }
 
     if (command == "disconnect") {
-      local.removePeer(arg(1));
+      // Находим устройство в списке пиров, чтобы получить его адрес и пароль
+      const std::string disconnectId = arg(1);
+      std::string peerHost, peerPort, peerPassword;
+      for (const auto& peer : local.peers()) {
+        if (peer.id == disconnectId || peer.name == disconnectId || peer.address() == disconnectId) {
+          peerHost = peer.host;
+          peerPort = std::to_string(peer.port);
+          peerPassword = peer.password;
+          break;
+        }
+      }
+      local.removePeer(disconnectId);
+      // Обратный отключ: удаляем себя из списка удалённого устройства
+      if (!peerHost.empty()) {
+        try {
+          DeviceClient(peerHost, static_cast<uint16_t>(std::stoul(peerPort)), peerPassword)
+              .removePeer(local.info().id);
+        } catch (const std::exception&) {
+          // Если удалённое устройство недоступно — не критично.
+        }
+      }
       std::cout << "Устройство отключено.\n";
       return 0;
     }

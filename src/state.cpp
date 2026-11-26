@@ -122,6 +122,14 @@ std::optional<Peer> NodeState::findPeer(const std::string& key) const {
   return std::nullopt;
 }
 
+std::optional<Peer> NodeState::findPeerByName(const std::string& name) const {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  for (const auto& peer : peers_) {
+    if (peer.name == name) return peer;
+  }
+  return std::nullopt;
+}
+
 std::vector<Message> NodeState::messagesSince(uint64_t since) const {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   std::vector<Message> result;
