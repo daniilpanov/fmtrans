@@ -36,7 +36,9 @@ void NodeState::load() {
     json value;
     input >> value;
     info_.id = value.value("id", info_.id);
-    info_.name = value.value("name", info_.name);
+    // Name comes only from --name CLI argument, never from state.json,
+    // so a daemon started with --name alpha always shows "node-alpha",
+    // not the default "device" from a previous run.
     info_.publicAccess = config_.password.empty();
     nextSeq_ = value.value("nextSeq", static_cast<uint64_t>(1));
     for (const auto& item : value.value("peers", json::array())) {
