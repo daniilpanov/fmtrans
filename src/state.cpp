@@ -94,9 +94,17 @@ void NodeState::addPeer(const Peer& peer) {
   if (stored.id == info_.id) throw Error("cannot add self as peer");
   // Single source of truth: reject duplicates by id, name, or address.
   for (const auto& item : peers_) {
-    if (item.id == stored.id) throw Error("peer with id " + stored.id + " already exists");
-    if (!stored.name.empty() && item.name == stored.name) throw Error("peer with name " + stored.name + " already exists");
-    if (item.host == stored.host && item.port == stored.port) throw Error("peer at " + stored.address() + " already exists");
+    // Same ID — то же устройство, уже в списке, ничего не делаем.
+    if (item.id == stored.id) return;
+    const bool sameAddress = (item.host == stored.host && item.port == stored.port);
+    const bool sameName = !stored.name.empty() && item.name == stored.name;
+    // Имя и адрес совпадают — это то же устройство после перезапуска,
+    // повторное подключение не является ошибкой.
+    if (sameAddress && sameName) return;
+    // Имя занято другим устройством.
+    if (sameName) throw Error("peer with name " + stored.name + " already exists");
+    // Адрес занят другим устройством.
+    if (sameAddress) throw Error("peer at " + stored.address() + " already exists");
   }
   peers_.push_back(stored);
   save();

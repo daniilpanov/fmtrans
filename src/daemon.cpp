@@ -91,15 +91,6 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request,
       }
       peer.source = "direct";
 
-      // Проверка дубликата имени: если имя уже есть в списке подключений,
-      // возвращаем ошибку.
-      if (!peer.name.empty()) {
-        if (auto existing = state_.findPeerByName(peer.name)) {
-          return error(400, "устройство с именем '" + peer.name +
-                       "' уже есть в списке подключений");
-        }
-      }
-
       state_.addPeer(peer);
 
       return net::HttpResponse::json(200, success(peer.toJson(!loopback(request))).dump());

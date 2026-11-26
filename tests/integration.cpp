@@ -388,7 +388,8 @@ void testConnectToSelf() {
   std::cout << "  connect to self rejected ok\n";
 }
 
-// Bug 5: connecting with a name already in the list must fail.
+// Bug 5: connecting with a name already in the list must fail,
+// unless it's the same device (same IP:port) reconnecting.
 void testConnectDuplicateName() {
   const uint16_t portA = freePort();
   const uint16_t portB = freePort();
@@ -406,8 +407,8 @@ void testConnectDuplicateName() {
   const auto peers1b = b.client().peers();
   CHECK(peers1b.size() == 1);
 
-  // Add B again with same name but different id (simulating duplicate).
-  // This should throw AND reset connection (server removes existing peer).
+  // Add B again with same name, same address, different id.
+  // Это то же самое устройство — не должно быть ошибки.
   Peer bAgain = b.describe();
   bAgain.id = "duplicate-id-" + bAgain.id;
   bool threw = false;
@@ -416,15 +417,26 @@ void testConnectDuplicateName() {
   } catch (const std::exception&) {
     threw = true;
   }
-  CHECK(threw);
+  CHECK(!threw);
 
-  // Server rejected duplicate but kept existing peer (no auto-removal).
+  // Список не должен содержать дубляжа.
   const auto peers2 = a.client().peers();
   CHECK(peers2.size() == 1);
 
-  // B still knows A (we didn't remove from B's side).
-  const auto peersB = b.client().peers();
-  CHECK(containsPeer(peersB, a.info().id));
+  // Разное устройство с тем же именем, но другим адресом — должно быть ошибкой.
+  Peer c = b.describe();
+  c.id = "different-device-id";
+  c.name = "node-b";
+  c.host = "127.0.0.1";
+  c.port = freePort();
+  bool threw2 = false;
+  try {
+    a.client().addPeer(c);
+  } catch (const std::exception&) {
+    threw2 = true;
+  }
+  CHECK(threw2);
+
   std::cout << "  connect duplicate name rejected ok\n";
 }
 
