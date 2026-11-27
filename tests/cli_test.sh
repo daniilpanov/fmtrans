@@ -16,7 +16,7 @@ mkdir -p "$ROOT/a" "$ROOT/b" "$ROOT/c" "$ROOT/d"
 export FMTRANS_HOME="$ROOT/a"; "$CLI" daemon start --port "$PA" --name alpha
 export FMTRANS_HOME="$ROOT/b"; "$CLI" daemon start --port "$PB" --name beta
 export FMTRANS_HOME="$ROOT/c"; "$CLI" daemon start --port "$PC" --name gamma
-export FMTRANS_HOME="$ROOT/d"; "$CLI" daemon start --port "$PD" --name delta --password sekret
+export FMTRANS_HOME="$ROOT/d"; "$CLI" daemon start --port "$PD" --name delta
 
 assert_contains() {
   local text="$1" needle="$2" label="$3"
@@ -77,16 +77,6 @@ FMTRANS_HOME="$ROOT/a" "$CLI" put "127.0.0.1:$PB" "$ROOT/folder" "book" >/dev/nu
 [[ "$(cat "$ROOT/b/data/book/inner/two.txt")" == "dva" ]] || { echo "FAIL nested put" >&2; exit 1; }
 FMTRANS_HOME="$ROOT/a" "$CLI" get "127.0.0.1:$PB" book "$ROOT/downloaded" >/dev/null
 [[ "$(cat "$ROOT/downloaded/one.txt")" == "odin" ]] || { echo "FAIL folder get" >&2; exit 1; }
-
-# Password-protected peer and a wrong-password rejection.
-if FMTRANS_HOME="$ROOT/a" "$CLI" connect "127.0.0.1:$PD" --password wrong >/dev/null 2>&1; then
-  echo "FAIL wrong password accepted" >&2
-  exit 1
-fi
-FMTRANS_HOME="$ROOT/a" "$CLI" connect "127.0.0.1:$PD" --password sekret >/dev/null
-DEVICES_A="$(FMTRANS_HOME="$ROOT/a" "$CLI" devices)"
-assert_contains "$DEVICES_A" "delta" "password peer"
-assert_contains "$DEVICES_A" "по паролю" "password access"
 
 # Live WebSocket event stream.
 timeout 5 env FMTRANS_HOME="$ROOT/a" "$CLI" events "127.0.0.1:$PB" > "$ROOT/events.txt" 2>&1 &

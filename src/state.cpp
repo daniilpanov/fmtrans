@@ -21,7 +21,7 @@ namespace fs = std::filesystem;
 NodeState::NodeState(LocalConfig config) : config_(std::move(config)) {
   info_.id = makeId();
   info_.name = config_.name;
-  info_.publicAccess = config_.password.empty();
+  info_.publicAccess = true;
 }
 
 void NodeState::load() {
@@ -39,7 +39,6 @@ void NodeState::load() {
     // Name comes only from --name CLI argument, never from state.json,
     // so a daemon started with --name alpha always shows "node-alpha",
     // not the default "device" from a previous run.
-    info_.publicAccess = config_.password.empty();
     nextSeq_ = value.value("nextSeq", static_cast<uint64_t>(1));
     for (const auto& item : value.value("peers", json::array())) {
       peers_.push_back(Peer::fromJson(item));
@@ -69,17 +68,6 @@ void NodeState::save() const {
   }
   platform::setFilePermissions(temporary, 0600);
   fs::rename(temporary, path);
-}
-
-bool NodeState::authorized(const std::string& token) const {
-  if (config_.password.empty()) return true;
-  const std::string& expected = config_.password;
-  if (token.size() != expected.size()) return false;
-  unsigned char diff = 0;
-  for (size_t i = 0; i < expected.size(); ++i) {
-    diff |= static_cast<unsigned char>(token[i]) ^ static_cast<unsigned char>(expected[i]);
-  }
-  return diff == 0;
 }
 
 std::vector<Peer> NodeState::peers() const {

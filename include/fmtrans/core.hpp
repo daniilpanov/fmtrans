@@ -36,13 +36,11 @@ struct Peer {
   std::string name;
   std::string host;
   uint16_t port = 0;
-  std::string password;
   bool publicAccess = false;
   // "direct" - connected explicitly, "shared" - discovered from another peer.
   std::string source = "direct";
 
-  // maskPassword replaces a non-empty password with "***" for remote callers.
-  json toJson(bool maskPassword = false) const;
+  json toJson() const;
   static Peer fromJson(const json& value);
   std::string address() const { return host + ":" + std::to_string(port); }
 };
@@ -117,7 +115,7 @@ class IDevice {
 
 class DeviceClient : public IDevice {
  public:
-  DeviceClient(std::string host, uint16_t port, std::string password = "");
+  DeviceClient(std::string host, uint16_t port);
 
   DeviceInfo info() const override;
   std::vector<Peer> peers() const override;
@@ -135,7 +133,6 @@ class DeviceClient : public IDevice {
 
   const std::string& host() const { return host_; }
   uint16_t port() const { return port_; }
-  const std::string& password() const { return password_; }
 
  private:
   net::HttpClient::Result raw(const std::string& method, const std::string& path,
@@ -152,14 +149,12 @@ class DeviceClient : public IDevice {
 
   std::string host_;
   uint16_t port_;
-  std::string password_;
 };
 
 struct LocalConfig {
   std::string host = "127.0.0.1";
   uint16_t port = 9000;
   std::string name = "device";
-  std::string password;
   std::string root = "data";
 };
 

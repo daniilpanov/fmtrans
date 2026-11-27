@@ -55,12 +55,11 @@ DeviceInfo DeviceInfo::fromJson(const json& value) {
   return info;
 }
 
-json Peer::toJson(bool maskPassword) const {
+json Peer::toJson() const {
   return {{"id", id},
           {"name", name},
           {"host", host},
           {"port", port},
-          {"password", maskPassword && !password.empty() ? "***" : password},
           {"public", publicAccess},
           {"source", source}};
 }
@@ -71,7 +70,6 @@ Peer Peer::fromJson(const json& value) {
   peer.name = value.value("name", "");
   peer.host = value.value("host", "");
   peer.port = static_cast<uint16_t>(value.value("port", 0));
-  peer.password = value.value("password", "");
   peer.publicAccess = value.value("public", false);
   peer.source = value.value("source", "direct");
   return peer;
@@ -124,7 +122,6 @@ LocalConfig loadLocalConfig() {
     config.host = value.value("host", config.host);
     config.port = static_cast<uint16_t>(value.value("port", config.port));
     config.name = value.value("name", config.name);
-    config.password = value.value("password", config.password);
     config.root = value.value("root", config.root);
   } catch (const std::exception&) {
     // Broken config: fall back to defaults.
@@ -134,8 +131,7 @@ LocalConfig loadLocalConfig() {
 
 void saveLocalConfig(const LocalConfig& config) {
   const json value = {{"host", config.host}, {"port", config.port},
-                      {"name", config.name}, {"password", config.password},
-                      {"root", config.root}};
+                      {"name", config.name}, {"root", config.root}};
   const std::string path = homeDir() + "/local.conf";
   const std::string temporary = path + ".tmp";
   {
@@ -165,14 +161,13 @@ std::string nowIso() {
   return buffer;
 }
 
-DeviceClient::DeviceClient(std::string host, uint16_t port, std::string password)
-    : host_(std::move(host)), port_(port), password_(std::move(password)) {}
+DeviceClient::DeviceClient(std::string host, uint16_t port)
+    : host_(std::move(host)), port_(port) {}
 
 net::HttpClient::Result DeviceClient::raw(const std::string& method, const std::string& path,
                                           const Bytes& body,
                                           const std::string& contentType) const {
   std::map<std::string, std::string> headers;
-  if (!password_.empty()) headers["X-Fmtrans-Auth"] = password_;
   if (!contentType.empty()) headers["Content-Type"] = contentType;
   return net::HttpClient().request(method, host_, port_, "/api/v1" + path, headers, body);
 }
@@ -290,7 +285,6 @@ net::HttpClient::Result DeviceClient::rawStream(
     const std::string& method, const std::string& path,
     ByteReader reader, const std::string& contentType) const {
   std::map<std::string, std::string> headers;
-  if (!password_.empty()) headers["X-Fmtrans-Auth"] = password_;
   if (!contentType.empty()) headers["Content-Type"] = contentType;
   return net::HttpClient().requestStream(method, host_, port_, "/api/v1" + path,
                                          headers, reader);

@@ -65,9 +65,8 @@ std::string tempHome(const std::string& tag) {
 
 class DaemonProc {
  public:
-  DaemonProc(std::string tag, uint16_t port, std::string name, std::string password = "")
-      : home_(tempHome(tag)), port_(port), name_(std::move(name)),
-        password_(std::move(password)) {
+  DaemonProc(std::string tag, uint16_t port, std::string name)
+      : home_(tempHome(tag)), port_(port), name_(std::move(name)) {
     fs::create_directories(home_);
   }
 
@@ -85,7 +84,7 @@ class DaemonProc {
       ::close(devnull);
       const std::string root = home_ + "/data";
       execl(FMTRANSD_PATH, "fmtransd", "--port", std::to_string(port_).c_str(),
-            "--name", name_.c_str(), "--password", password_.c_str(),
+            "--name", name_.c_str(),
             "--root", root.c_str(), static_cast<char*>(nullptr));
       _exit(1);
     }
@@ -112,17 +111,16 @@ class DaemonProc {
     return false;
   }
 
-  DeviceClient client() const { return DeviceClient("127.0.0.1", port_, password_); }
+  DeviceClient client() const { return DeviceClient("127.0.0.1", port_); }
   DeviceInfo info() const { return client().info(); }
-  Peer describe(const std::string& password = "") const {
+  Peer describe() const {
     Peer peer;
     const DeviceInfo details = info();
     peer.id = details.id;
     peer.name = details.name;
     peer.host = "127.0.0.1";
     peer.port = port_;
-    peer.password = password;
-    peer.publicAccess = password.empty();
+    peer.publicAccess = true;
     return peer;
   }
 
@@ -133,7 +131,6 @@ class DaemonProc {
   std::string home_;
   uint16_t port_;
   std::string name_;
-  std::string password_;
   pid_t pid_ = 0;
 };
 
@@ -165,25 +162,6 @@ void testInfoAndLocalParity() {
   DeviceClient local("127.0.0.1", port);
   CHECK(local.info().id == info.id);
   std::cout << "  info parity ok\n";
-}
-
-void testConnectAndPassword() {
-  const uint16_t portA = freePort();
-  const uint16_t portB = freePort();
-  DaemonProc a("auth-a", portA, "node-a", "secret");
-  DaemonProc b("auth-b", portB, "node-b");
-  CHECK(a.start());
-  CHECK(b.start());
-  CHECK(a.waitReady() && b.waitReady());
-
-  CHECK_THROWS(DeviceClient("127.0.0.1", portA, "wrong").info());
-  CHECK(a.client().info().publicAccess == false);
-
-  a.client().addPeer(b.describe());
-  const auto peers = a.client().peers();
-  CHECK(peers.size() == 1);
-  CHECK(peers[0].id == b.info().id);
-  std::cout << "  connect and password ok\n";
 }
 
 void testPublicSharing() {
@@ -1024,8 +1002,6 @@ int main() {
   std::cout << "integration tests\n";
   std::cout << "[TEST] testInfoAndLocalParity" << std::endl;
   testInfoAndLocalParity();
-  std::cout << "[TEST] testConnectAndPassword" << std::endl;
-  testConnectAndPassword();
   std::cout << "[TEST] testPublicSharing" << std::endl;
   testPublicSharing();
   std::cout << "[TEST] testBrowseAndFiles" << std::endl;
