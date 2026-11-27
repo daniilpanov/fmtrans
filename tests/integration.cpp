@@ -422,6 +422,26 @@ void testConnectToSelf() {
   std::cout << "  connect to self rejected ok\n";
 }
 
+// Bug: peer with bind address 0.0.0.0 cannot be added — connecting to it
+// would hit localhost (self), not the intended peer.
+void testRejectPeerWithBindAddress() {
+  const uint16_t portA = freePort();
+  DaemonProc a("bind-a", portA, "node-a");
+  CHECK(a.start());
+  CHECK(a.waitReady());
+
+  Peer bindPeer = a.describe();
+  bindPeer.host = "0.0.0.0";
+  bool threw = false;
+  try {
+    a.client().addPeer(bindPeer);
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  CHECK(threw);
+  std::cout << "  peer with 0.0.0.0 host rejected ok\n";
+}
+
 // Bug 5: connecting with a name already in the list must fail,
 // unless it's the same device (same IP:port) reconnecting.
 void testConnectDuplicateName() {
@@ -856,6 +876,8 @@ int main() {
   testConnectWithName();
   std::cout << "[TEST] testConnectToSelf" << std::endl;
   testConnectToSelf();
+  std::cout << "[TEST] testRejectPeerWithBindAddress" << std::endl;
+  testRejectPeerWithBindAddress();
   std::cout << "[TEST] testConnectDuplicateName" << std::endl;
   testConnectDuplicateName();
   std::cout << "[TEST] testDisconnectNonExistent" << std::endl;
