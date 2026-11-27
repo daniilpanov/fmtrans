@@ -92,6 +92,9 @@ void NodeState::addPeer(const Peer& peer) {
   if (callbackInProgress_) return;
   Peer stored = peer;
   if (stored.id.empty()) stored.id = makeId();
+  // Host 0.0.0.0 means "all interfaces" and cannot be used to connect to a peer.
+  // Connecting to 0.0.0.0 would hit localhost (self), not the intended peer.
+  if (stored.host == "0.0.0.0") throw Error("cannot add peer with bind address 0.0.0.0");
   // Cannot add oneself as a peer.
   if (stored.id == info_.id) throw Error("cannot add self as peer");
   // Single source of truth: reject duplicates by id, name, or address.

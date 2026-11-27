@@ -207,6 +207,12 @@ bool Daemon::bind() {
   try {
     auto peers = state_.peers();
     for (const auto& peer : peers) {
+      // Хост 0.0.0.0 — адрес привязки ко всем интерфейсам, им нельзя подключаться
+      // к другому устройству (попадёт на localhost/себя). Удаляем такие пиры.
+      if (peer.host == "0.0.0.0") {
+        state_.removePeer(peer.id);
+        continue;
+      }
       try {
         net::HttpClient client;
         auto result = client.request("GET", peer.host, peer.port, "/api/v1/info",
