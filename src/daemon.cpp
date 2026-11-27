@@ -90,6 +90,14 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request,
       }
       peer.source = "direct";
 
+      // Адрес привязки 0.0.0.0 (все интерфейсы) недоступен извне.
+      // Если клиент прислал его при обратном подключении, подменяем на
+      // реальный адрес источника соединения (request.peer), иначе удалённое
+      // устройство подключится к самому себе.
+      if (peer.host == "0.0.0.0" && !request.peer.empty()) {
+        peer.host = request.peer;
+      }
+
       state_.addPeer(peer);
 
       return net::HttpResponse::json(200, success(peer.toJson(!loopback(request))).dump());

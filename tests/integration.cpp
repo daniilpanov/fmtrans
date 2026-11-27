@@ -332,6 +332,39 @@ void testBidirectionalConnect() {
   std::cout << "  bidirectional connect ok\n";
 }
 
+// Bug: обратное подключение должно использовать реальный адрес клиента,
+// а не адрес привязки 0.0.0.0 (который ведёт к самому себе).
+void testReverseConnectUsesRealAddressNotBindAddress() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("addr-a", portA, "node-a");
+  DaemonProc b("addr-b", portB, "node-b");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  // A добавляет Б как пира (как делает CLI connect).
+  a.client().addPeer(b.describe());
+
+  // Обратное подключение: А говорит Б добавить А, но с хостом "0.0.0.0"
+  // (адрес привязки ко всем интерфейсам — недоступен извне).
+  Peer aPeer = a.describe();
+  aPeer.host = "0.0.0.0";
+  b.client().addPeer(aPeer);
+
+  // У Б должен быть пир А с реальным адресом 127.0.0.1, а не "0.0.0.0".
+  bool foundA = false;
+  for (const auto& peer : b.client().peers()) {
+    if (peer.id == a.info().id) {
+      foundA = true;
+      CHECK(peer.host != "0.0.0.0");
+      CHECK(peer.host == "127.0.0.1");
+      break;
+    }
+  }
+  CHECK(foundA);
+  std::cout << "  reverse connect uses real address ok\n";
+}
+
 // Bug 2: messages sent from A to B must be readable on B.
 void testMessagesSendReceive() {
   const uint16_t portA = freePort();
@@ -815,6 +848,8 @@ int main() {
   testDisconnect();
   std::cout << "[TEST] testBidirectionalConnect" << std::endl;
   testBidirectionalConnect();
+  std::cout << "[TEST] testReverseConnectUsesRealAddressNotBindAddress" << std::endl;
+  testReverseConnectUsesRealAddressNotBindAddress();
   std::cout << "[TEST] testMessagesSendReceive" << std::endl;
   testMessagesSendReceive();
   std::cout << "[TEST] testConnectWithName" << std::endl;
