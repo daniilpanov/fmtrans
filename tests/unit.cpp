@@ -124,18 +124,14 @@ void testWebSocketBuffered() {
 }
 
 void testPeerMasking() {
+  // Password removed: peer now has no password field.
   Peer peer;
   peer.id = "id";
   peer.name = "name";
   peer.host = "host";
   peer.port = 9100;
-  peer.password = "secret";
-  peer.publicAccess = false;
-  CHECK(peer.toJson(true).at("password") == "***");
-  CHECK(peer.toJson().at("password") == "secret");
-  Peer publicPeer;
-  publicPeer.password.clear();
-  CHECK(publicPeer.toJson(true).at("password") == "");
+  peer.publicAccess = true;
+  CHECK(peer.toJson().at("public") == true);
 }
 
 }  // namespace

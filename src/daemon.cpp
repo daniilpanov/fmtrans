@@ -32,11 +32,6 @@ json messagesToJson(const std::vector<Message>& messages) {
   return result;
 }
 
-// Only the local CLI may see stored peer passwords.
-bool loopback(const net::HttpRequest& request) {
-  return request.peer == "127.0.0.1" || request.peer == "::1";
-}
-
 bool knownPath(const std::string& path) {
   return path == "/api/v1/info" || path == "/api/v1/peers" ||
          path.rfind("/api/v1/peers/", 0) == 0 || path == "/api/v1/fs" ||
@@ -63,19 +58,14 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request,
   const std::string& path = request.path;
   const std::string& method = request.method;
 
-  if (!state_.authorized(request.header("x-fmtrans-auth"))) {
-    return error(401, "unauthorized");
-  }
-
   try {
     if (method == "GET" && path == "/api/v1/info") {
       return net::HttpResponse::json(200, success(state_.info().toJson()).dump());
     }
 
     if (method == "GET" && path == "/api/v1/peers") {
-      const bool mask = !loopback(request);
       json peers = json::array();
-      for (const auto& peer : state_.peers()) peers.push_back(peer.toJson(mask));
+      for (const auto& peer : state_.peers()) peers.push_back(peer.toJson());
       return net::HttpResponse::json(200, success(peers).dump());
     }
 
@@ -100,7 +90,7 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request,
 
       state_.addPeer(peer);
 
-      return net::HttpResponse::json(200, success(peer.toJson(!loopback(request))).dump());
+      return net::HttpResponse::json(200, success(peer.toJson()).dump());
     }
 
     if (method == "DELETE" && path.rfind("/api/v1/peers/", 0) == 0) {
@@ -165,12 +155,6 @@ net::HttpResponse Daemon::handle(const net::HttpRequest& request,
 
 void Daemon::handleWs(int fd, const net::HttpRequest& request) {
   net::Socket socket(fd);
-  if (!state_.authorized(request.header("x-fmtrans-auth"))) {
-    const std::string reply =
-        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-    socket.sendAll(reply);
-    return;
-  }
   const std::string key = request.header("sec-websocket-key");
   if (key.empty()) return;
   std::string handshake =
@@ -216,7 +200,7 @@ bool Daemon::bind() {
       try {
         net::HttpClient client;
         auto result = client.request("GET", peer.host, peer.port, "/api/v1/info",
-                                     {{"X-Fmtrans-Auth", peer.password}}, {}, 2000);
+                                     {}, {}, 2000);
         if (!result.ok) {
           state_.removePeer(peer.id);
         }
@@ -241,14 +225,13 @@ bool Daemon::bind() {
     if (localHost == "0.0.0.0") localHost = "127.0.0.1";
     for (const auto& peer : remainingPeers) {
       try {
-        DeviceClient client(peer.host, peer.port, peer.password);
+        DeviceClient client(peer.host, peer.port);
         Peer localPeer;
         localPeer.id = localInfo.id;
         localPeer.name = localInfo.name;
         localPeer.publicAccess = localInfo.publicAccess;
         localPeer.host = localHost;
         localPeer.port = localConfig.port;
-        localPeer.password = localConfig.password;
         localPeer.source = "direct";
         client.addPeer(localPeer);
       } catch (const std::exception&) {

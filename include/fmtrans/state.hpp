@@ -20,7 +20,6 @@ class NodeState {
   void save() const;
 
   const DeviceInfo& info() const { return info_; }
-  bool authorized(const std::string& token) const;
   const LocalConfig& config() const { return config_; }
 
   std::vector<Peer> peers() const;

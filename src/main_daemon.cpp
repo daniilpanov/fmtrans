@@ -12,7 +12,6 @@ int main(int argc, char** argv) {
   if (args.has("host")) config.host = args.get("host");
   if (args.has("port")) config.port = static_cast<uint16_t>(std::stoul(args.get("port")));
   if (args.has("name")) config.name = args.get("name");
-  if (args.has("password")) config.password = args.get("password");
   if (args.has("root")) config.root = args.get("root");
   config.root = std::filesystem::absolute(config.root).string();
 

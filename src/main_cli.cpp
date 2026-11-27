@@ -35,12 +35,12 @@ void printHelp() {
 Использование:
   fmtrans status                       состояние локального устройства
   fmtrans listen --port N --name N     запустить демон в текущем терминале
-                 [--password P] [--root DIR] [--host H]
+                 [--root DIR] [--host H]
   fmtrans daemon start|stop|status     управление фоновым демоном
-                 [--port N] [--name N] [--password P] [--root DIR] [--host H]
+                 [--port N] [--name N] [--root DIR] [--host H]
   fmtrans devices                      список известных устройств
   fmtrans connect HOST:PORT            подключить устройство
-                 [--password P] [--name N]
+                 [--name N]
   fmtrans disconnect ID                отключить устройство
   fmtrans browse УСТРОЙСТВО [ПУТЬ]     просмотр файлов
   fmtrans put УСТРОЙСТВО ЛОКАЛЬНЫЙ УДАЛЁННЫЙ
@@ -63,7 +63,6 @@ LocalConfig configFromArgs(const Args& args) {
   if (args.has("host")) config.host = args.get("host");
   if (args.has("port")) config.port = static_cast<uint16_t>(std::stoul(args.get("port")));
   if (args.has("name")) config.name = args.get("name");
-  if (args.has("password")) config.password = args.get("password");
   if (args.has("root")) config.root = args.get("root");
   config.root = fs::absolute(config.root).string();
   return config;
@@ -72,7 +71,6 @@ LocalConfig configFromArgs(const Args& args) {
 struct Target {
   std::string host;
   uint16_t port = 0;
-  std::string password;
   std::shared_ptr<IDevice> device;
 };
 
@@ -85,9 +83,7 @@ Target resolveTarget(const std::string& key, const LocalConfig& config,
     Target target;
     target.host = config.host;
     target.port = config.port;
-    target.password = config.password;
-    target.device = std::make_shared<DeviceClient>(config.host, config.port,
-                                                   config.password);
+    target.device = std::make_shared<DeviceClient>(config.host, config.port);
     return target;
   }
 
@@ -100,8 +96,7 @@ Target resolveTarget(const std::string& key, const LocalConfig& config,
       Target target;
       target.host = peer.host;
       target.port = peer.port;
-      target.password = peer.password;
-      target.device = std::make_shared<DeviceClient>(peer.host, peer.port, peer.password);
+      target.device = std::make_shared<DeviceClient>(peer.host, peer.port);
       return target;
     }
   }
@@ -206,9 +201,6 @@ void watchEvents(const Target& target) {
       "Connection: Upgrade\r\n"
       "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
       "Sec-WebSocket-Version: 13\r\n";
-  if (!target.password.empty()) {
-    request += "X-Fmtrans-Auth: " + target.password + "\r\n";
-  }
   request += "\r\n";
   if (!socket.sendAll(request)) throw Error("не удалось отправить запрос");
   Bytes response;
@@ -375,7 +367,7 @@ int main(int argc, char** argv) {
     }
 
     const LocalConfig config = loadLocalConfig();
-    DeviceClient local(config.host, config.port, config.password);
+    DeviceClient local(config.host, config.port);
 
     if (command == "status") {
       const DeviceInfo info = local.info();
@@ -412,10 +404,9 @@ int main(int argc, char** argv) {
       Peer peer;
       peer.host = address.substr(0, colon);
       peer.port = static_cast<uint16_t>(std::stoul(address.substr(colon + 1)));
-      peer.password = args.get("password");
       peer.source = "direct";
       // Сначала получаем информацию об устройстве, чтобы знать его настоящее имя и идентификатор.
-      const DeviceInfo info = DeviceClient(peer.host, peer.port, peer.password).info();
+      const DeviceInfo info = DeviceClient(peer.host, peer.port).info();
       if (peer.name.empty()) peer.name = info.name;
       peer.id = info.id;
       peer.publicAccess = info.publicAccess;
@@ -431,10 +422,9 @@ int main(int argc, char** argv) {
       localPeer.publicAccess = localInfo.publicAccess;
       localPeer.host = config.host;
       localPeer.port = config.port;
-      localPeer.password = config.password;
       localPeer.source = "direct";
       try {
-        DeviceClient(peer.host, peer.port, peer.password).addPeer(localPeer);
+        DeviceClient(peer.host, peer.port).addPeer(localPeer);
       } catch (const std::exception&) {
         // Если удалённое устройство уже знает о нас, или имя занято —
         // это не критично — локальное подключение уже установлено.
@@ -444,14 +434,13 @@ int main(int argc, char** argv) {
     }
 
     if (command == "disconnect") {
-      // Находим устройство в списке пиров, чтобы получить его адрес и пароль
+      // Находим устройство в списке пиров, чтобы получить его адрес
       const std::string disconnectId = arg(1);
-      std::string peerHost, peerPort, peerPassword;
+      std::string peerHost, peerPort;
       for (const auto& peer : local.peers()) {
         if (peer.id == disconnectId || peer.name == disconnectId || peer.address() == disconnectId) {
           peerHost = peer.host;
           peerPort = std::to_string(peer.port);
-          peerPassword = peer.password;
           break;
         }
       }
@@ -459,7 +448,7 @@ int main(int argc, char** argv) {
       // Обратный отключ: удаляем себя из списка удалённого устройства
       if (!peerHost.empty()) {
         try {
-          DeviceClient(peerHost, static_cast<uint16_t>(std::stoul(peerPort)), peerPassword)
+          DeviceClient(peerHost, static_cast<uint16_t>(std::stoul(peerPort)))
               .removePeer(local.info().id);
         } catch (const std::exception&) {
           // Если удалённое устройство недоступно — не критично.
