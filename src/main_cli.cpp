@@ -48,7 +48,7 @@ void printHelp() {
   fmtrans get УСТРОЙСТВО УДАЛЁННЫЙ ЛОКАЛЬНЫЙ
                                        получить файл или папку
   fmtrans msg УСТРОЙСТВО ТЕКСТ         отправить текстовое сообщение
-  fmtrans msgs УСТРОЙСТВО [--since N] [--only-from] [--only-to]   прочитать сообщения
+  fmtrans msgs УСТРОЙСТВО [--since N] [--only-from] [--only-to] [--last-message]   прочитать сообщения
   fmtrans events УСТРОЙСТВО            живая лента событий
   fmtrans --help                       эта справка
 
@@ -531,6 +531,7 @@ int main(int argc, char** argv) {
       const uint64_t since = args.has("since") ? std::stoull(args.get("since")) : 0;
       const bool onlyFrom = args.has("only-from");
       const bool onlyTo = args.has("only-to");
+      const bool lastMessage = args.has("last-message");
       if (onlyFrom && onlyTo) throw Error("--only-from и --only-to нельзя указывать одновременно");
       const std::string targetId = target.device->info().id;
       std::vector<Message> messages = target.device->readMessages(since);
@@ -545,6 +546,10 @@ int main(int argc, char** argv) {
         for (const auto& m : messages)
           if (m.to == targetId) filtered.push_back(m);
         messages = std::move(filtered);
+      }
+      if (lastMessage) {
+        if (!messages.empty()) std::cout << messages.back().text << "\n";
+        return 0;
       }
       printMessages(messages, local);
       return 0;
