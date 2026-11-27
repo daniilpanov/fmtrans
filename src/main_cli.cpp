@@ -520,8 +520,14 @@ int main(int argc, char** argv) {
       const Target target = resolveTarget(arg(1), config, local);
       std::string text = arg(2);
       for (size_t i = 3; i < args.positional.size(); ++i) text += " " + args.positional[i];
+      // Проверяем, что целевое устройство доступно (получаем его идентификатор).
       const std::string toDeviceId = target.device->info().id;
-      target.device->sendMessage(text, toDeviceId, local.info().id);
+      try {
+        target.device->sendMessage(text, toDeviceId, local.info().id);
+      } catch (const std::exception& exception) {
+        throw Error("не удалось отправить сообщение устройству " + target.host + ":" +
+                    std::to_string(target.port) + ": " + exception.what());
+      }
       std::cout << "Сообщение отправлено.\n";
       return 0;
     }
