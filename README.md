@@ -13,8 +13,6 @@
 4. Передача файлов и целых папок (рекурсивно) между устройствами.
 5. Текстовые сообщения + живая WS-лента.
 6. Просмотр файлов на любом устройстве.
-7. Передача файлов через третье устройство (relay); локальный узел использует
-   тот же интерфейс `IDevice`, что и удалённые.
 
 ## Сборка
 
@@ -66,9 +64,6 @@ fmtrans get 192.168.1.10:9100 /inbox/report.pdf ./copy.pdf
 fmtrans msg 192.168.1.10:9100 "Привет!"
 fmtrans msgs 192.168.1.10:9100 --since 5
 fmtrans events 192.168.1.10:9100
-
-# передача через третье устройство
-fmtrans relay 192.168.1.10:9100 server2 ./big.zip /inbox/big.zip
 ```
 
 `УСТРОЙСТВО` можно задать как `@local`, идентификатор, имя или `HOST:PORT`.
@@ -77,8 +72,6 @@ fmtrans relay 192.168.1.10:9100 server2 ./big.zip /inbox/big.zip
 
 ```
 CLI (ru) --DeviceClient(HTTP)--> fmtransd A --DeviceClient--> fmtransd B ...
-                                      |                    |
-                                      +------ relay -------+
 ```
 
 - `net` — POSIX TCP, HTTP/1.1 клиент/сервер, WebSocket-кадры, SHA1/base64.
@@ -97,7 +90,6 @@ CLI (ru) --DeviceClient(HTTP)--> fmtransd A --DeviceClient--> fmtransd B ...
 | GET | `/api/v1/fs?path=` | листинг |
 | GET/PUT | `/api/v1/fs/file?path=` | чтение / запись файла |
 | POST/GET | `/api/v1/messages` | отправка / чтение сообщений |
-| POST | `/api/v1/relay` | передача через узел дальше |
 | GET | `/ws` | живые события |
 
 Аутентификация: заголовок `X-Fmtrans-Auth: <password>`. публичное устройство —
@@ -107,8 +99,8 @@ CLI (ru) --DeviceClient(HTTP)--> fmtransd A --DeviceClient--> fmtransd B ...
 
 - `unit` — SHA1/base64, HTTP-парсер, WS-кадры, query, сериализация.
 - `integration` — 3 демона в отдельных домах: parity local/remote, пароль и `401`,
-  шеринг, файлы/папки и защита путей, сообщения + WS, relay, отключение.
+  шеринг, файлы/папки и защита путей, сообщения + WS, отключение.
 - `cli` — реальные фоновые демоны и все команды CLI, включая папки, пароль,
-  живую ленту и relay.
+  живую ленту.
 
 Все тесты запускаются на каждом коммите (`scripts/test.sh`).
