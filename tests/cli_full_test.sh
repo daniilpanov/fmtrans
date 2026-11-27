@@ -169,7 +169,8 @@ echo "=== 27. msgs без флагов показывает имя отправ�
 export FMTRANS_HOME="$ROOT/b"; OUT="$("$CLI" msgs "127.0.0.1:$PB" 2>&1)"; assert_contains "$OUT" "alpha" "msgs shows sender name alpha"
 
 echo "=== 28. msgs с --last-message (только текст последнего сообщения) ==="
-export FMTRANS_HOME="$ROOT/b"; OUT="$("$CLI" msgs "127.0.0.1:$PB" --last-message 2>&1)"; [[ "$OUT" == "привет от альфы" ]] && pass "msgs --last-message shows last text" || fail "msgs --last-message: '$OUT'"
+# На устройстве b последнее сообщение — это ответ от беты (отправлен бетой к альфе).
+export FMTRANS_HOME="$ROOT/b"; OUT="$("$CLI" msgs "127.0.0.1:$PB" --last-message 2>&1)"; [[ "$OUT" == "ответ от беты" ]] && pass "msgs --last-message shows last text" || fail "msgs --last-message: '$OUT'"
 
 echo "=== 29. msgs с --last-message и --only-to (текст последнего отфильтрованного) ==="
 export FMTRANS_HOME="$ROOT/b"; OUT="$("$CLI" msgs "127.0.0.1:$PB" --only-to --last-message 2>&1)"; [[ "$OUT" == "привет от альфы" ]] && pass "msgs --only-to --last-message" || fail "msgs --only-to --last-message: '$OUT'"
