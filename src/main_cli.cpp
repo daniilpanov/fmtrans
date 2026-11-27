@@ -539,6 +539,12 @@ int main(int argc, char** argv) {
         throw Error("не удалось отправить сообщение устройству " + target.host + ":" +
                     std::to_string(target.port) + ": " + exception.what());
       }
+      // Также сохраняем копию локально, чтобы можно было прочесть свои отправленные сообщения.
+      try {
+        local.sendMessage(text, toDeviceId, local.info().id);
+      } catch (const std::exception&) {
+        // Локальное сохранение не удалось — не критично, сообщение уже отправлено.
+      }
       std::cout << "Сообщение отправлено.\n";
       return 0;
     }
@@ -551,17 +557,18 @@ int main(int argc, char** argv) {
       const bool lastMessage = args.has("last-message");
       if (onlyFrom && onlyTo) throw Error("--only-from и --only-to нельзя указывать одновременно");
       const std::string targetId = target.device->info().id;
-      std::vector<Message> messages = target.device->readMessages(since);
-      if (onlyFrom) {
-        std::vector<Message> filtered;
-        for (const auto& m : messages)
-          if (m.from == targetId) filtered.push_back(m);
-        messages = std::move(filtered);
-      }
+      // Читаем сообщения из локального хранилища (и отправленные, и принятые).
+      std::vector<Message> messages = local.readMessages(since);
       if (onlyTo) {
         std::vector<Message> filtered;
         for (const auto& m : messages)
           if (m.to == targetId) filtered.push_back(m);
+        messages = std::move(filtered);
+      }
+      if (onlyFrom) {
+        std::vector<Message> filtered;
+        for (const auto& m : messages)
+          if (m.from == targetId) filtered.push_back(m);
         messages = std::move(filtered);
       }
       if (lastMessage) {

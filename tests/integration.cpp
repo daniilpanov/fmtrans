@@ -385,6 +385,132 @@ void testMessagesSendReceive() {
   std::cout << "  messages send/receive ok\n";
 }
 
+// Bug: sent messages must be stored locally on the sender device too,
+// so they can be read later with `msgs`.
+void testMsgStoredLocallyOnSender() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("local-msg-a", portA, "node-a");
+  DaemonProc b("local-msg-b", portB, "node-b");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  a.client().addPeer(b.describe());
+  b.client().addPeer(a.describe());
+
+  // A sends a message to B.
+  const std::string text = "hello from a to b";
+  b.client().sendMessage(text, "", a.info().id);
+
+  // Simulate what CLI `msg` does: also store a copy locally on A.
+  a.client().sendMessage(text, b.info().id, a.info().id);
+
+  // On A, the message should be readable as outgoing to B (to == b.id).
+  const auto messagesA = a.client().readMessages(0);
+  bool foundOutgoing = false;
+  for (const auto& m : messagesA) {
+    if (m.text == text && m.to == b.info().id && m.from == a.info().id) {
+      foundOutgoing = true;
+      break;
+    }
+  }
+  CHECK(foundOutgoing);
+
+  // On B, the message should be readable as incoming from A (from == a.id).
+  const auto messagesB = b.client().readMessages(0);
+  bool foundIncoming = false;
+  for (const auto& m : messagesB) {
+    if (m.text == text && m.from == a.info().id) {
+      foundIncoming = true;
+      break;
+    }
+  }
+  CHECK(foundIncoming);
+  std::cout << "  msg stored locally on sender ok\n";
+}
+
+// Bug: --only-from filter shows only messages received from the target device.
+void testMsgsLocalOnlyFrom() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("onlyfrom-a", portA, "node-a");
+  DaemonProc b("onlyfrom-b", portB, "node-b");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  a.client().addPeer(b.describe());
+  b.client().addPeer(a.describe());
+
+  // B sends a message to A.
+  const std::string textB = "hello from b to a";
+  a.client().sendMessage(textB, "", b.info().id);
+  // Store locally on B as outgoing.
+  b.client().sendMessage(textB, a.info().id, b.info().id);
+
+  // A sends a message to B.
+  const std::string textA = "hello from a to b";
+  b.client().sendMessage(textA, "", a.info().id);
+  // Store locally on A as outgoing.
+  a.client().sendMessage(textA, b.info().id, a.info().id);
+
+  // On A, --only-from B should show only messages from B (textB).
+  const auto messagesA = a.client().readMessages(0);
+  std::vector<Message> fromB;
+  for (const auto& m : messagesA)
+    if (m.from == b.info().id) fromB.push_back(m);
+  CHECK(fromB.size() == 1);
+  CHECK(fromB[0].text == textB);
+
+  // On B, --only-from A should show only messages from A (textA).
+  const auto messagesB = b.client().readMessages(0);
+  std::vector<Message> fromA;
+  for (const auto& m : messagesB)
+    if (m.from == a.info().id) fromA.push_back(m);
+  CHECK(fromA.size() == 1);
+  CHECK(fromA[0].text == textA);
+  std::cout << "  msgs --only-from ok\n";
+}
+
+// Bug: --only-to filter shows only messages sent to the target device.
+void testMsgsLocalOnlyTo() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("onlyto-a", portA, "node-a");
+  DaemonProc b("onlyto-b", portB, "node-b");
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+
+  a.client().addPeer(b.describe());
+  b.client().addPeer(a.describe());
+
+  // A sends a message to B.
+  const std::string textA = "hello from a to b";
+  b.client().sendMessage(textA, "", a.info().id);
+  a.client().sendMessage(textA, b.info().id, a.info().id);
+
+  // B sends a message to A.
+  const std::string textB = "hello from b to a";
+  a.client().sendMessage(textB, "", b.info().id);
+  b.client().sendMessage(textB, a.info().id, b.info().id);
+
+  // On A, --only-to B should show only messages to B (textA).
+  const auto messagesA = a.client().readMessages(0);
+  std::vector<Message> toB;
+  for (const auto& m : messagesA)
+    if (m.to == b.info().id) toB.push_back(m);
+  CHECK(toB.size() == 1);
+  CHECK(toB[0].text == textA);
+
+  // On B, --only-to A should show only messages to A (textB).
+  const auto messagesB = b.client().readMessages(0);
+  std::vector<Message> toA;
+  for (const auto& m : messagesB)
+    if (m.to == a.info().id) toA.push_back(m);
+  CHECK(toA.size() == 1);
+  CHECK(toA[0].text == textB);
+  std::cout << "  msgs --only-to ok\n";
+}
+
 // Bug 3: connect with --name must store the name in the peer descriptor.
 void testConnectWithName() {
   const uint16_t portA = freePort();
@@ -872,6 +998,12 @@ int main() {
   testReverseConnectUsesRealAddressNotBindAddress();
   std::cout << "[TEST] testMessagesSendReceive" << std::endl;
   testMessagesSendReceive();
+  std::cout << "[TEST] testMsgStoredLocallyOnSender" << std::endl;
+  testMsgStoredLocallyOnSender();
+  std::cout << "[TEST] testMsgsLocalOnlyFrom" << std::endl;
+  testMsgsLocalOnlyFrom();
+  std::cout << "[TEST] testMsgsLocalOnlyTo" << std::endl;
+  testMsgsLocalOnlyTo();
   std::cout << "[TEST] testConnectWithName" << std::endl;
   testConnectWithName();
   std::cout << "[TEST] testConnectToSelf" << std::endl;
