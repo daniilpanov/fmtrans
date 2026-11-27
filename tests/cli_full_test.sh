@@ -155,6 +155,19 @@ export FMTRANS_HOME="$ROOT/b"; OUT="$("$CLI" msg "127.0.0.1:$PA" "ответ о�
 echo "=== 23. msgs на a (прочитать ответ от b, читаем с a) ==="
 wait_for_contains "FMTRANS_HOME='$ROOT/b' '$CLI' msgs '127.0.0.1:$PA'" "ответ от беты" "msgs received from b (read from a)"
 
+echo "=== 24. msgs с --only-to (только сообщения, адресованные целевому устройству) ==="
+export FMTRANS_HOME="$ROOT/b"; OUT="$("$CLI" msgs "127.0.0.1:$PB" --only-to 2>&1)"; assert_contains "$OUT" "привет от альфы" "msgs b --only-to shows message to b"
+
+echo "=== 25. msgs с --only-from (только сообщения, отправленные целевым устройством) ==="
+# На устройстве b нет сообщений, отправленных самим b (from == id b), так что --only-from не покажет сообщение от a.
+export FMTRANS_HOME="$ROOT/b"; OUT="$("$CLI" msgs "127.0.0.1:$PB" --only-from 2>&1)"; assert_not_contains "$OUT" "привет от альфы" "msgs b --only-from does not show message from a"
+
+echo "=== 26. msgs с --only-from и --only-to одновременно -> ошибка ==="
+export FMTRANS_HOME="$ROOT/b"; if OUT="$("$CLI" msgs "127.0.0.1:$PB" --only-from --only-to 2>&1)"; then fail "msgs --only-from --only-to should error"; else pass "msgs --only-from --only-to rejected"; fi
+
+echo "=== 27. msgs без флагов показывает имя отправителя вместо id ==="
+export FMTRANS_HOME="$ROOT/b"; OUT="$("$CLI" msgs "127.0.0.1:$PB" 2>&1)"; assert_contains "$OUT" "alpha" "msgs shows sender name alpha"
+
 echo "=== 24. événements WebSocket ==="
 export FMTRANS_HOME="$ROOT/a"
 timeout 5 "$CLI" events "127.0.0.1:$PB" > "$ROOT/events_a.txt" 2>&1 &

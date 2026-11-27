@@ -48,7 +48,7 @@ void printHelp() {
   fmtrans get УСТРОЙСТВО УДАЛЁННЫЙ ЛОКАЛЬНЫЙ
                                        получить файл или папку
   fmtrans msg УСТРОЙСТВО ТЕКСТ         отправить текстовое сообщение
-  fmtrans msgs УСТРОЙСТВО [--since N]   прочитать сообщения
+  fmtrans msgs УСТРОЙСТВО [--since N] [--only-from] [--only-to]   прочитать сообщения
   fmtrans events УСТРОЙСТВО            живая лента событий
   fmtrans --help                       эта справка
 
@@ -165,11 +165,22 @@ void getRecursive(IDevice& device, const std::string& remotePath,
   }
 }
 
-void printMessages(const std::vector<Message>& messages) {
+void printMessages(const std::vector<Message>& messages, const DeviceClient& local) {
   for (const auto& message : messages) {
+    // Показываем имя отправителя вместо идентификатора.
+    std::string fromName = message.from;
+    for (const auto& peer : local.peers()) {
+      if (peer.id == message.from) { fromName = peer.name; break; }
+    }
     std::cout << "[" << message.seq << "] " << message.ts << " "
-              << (message.from.empty() ? "?" : message.from);
-    if (!message.to.empty()) std::cout << " -> " << message.to;
+              << (message.from.empty() ? "?" : fromName);
+    if (!message.to.empty()) {
+      std::string toName = message.to;
+      for (const auto& peer : local.peers()) {
+        if (peer.id == message.to) { toName = peer.name; break; }
+      }
+      std::cout << " -> " << toName;
+    }
     std::cout << ": " << message.text << "\n";
   }
 }
@@ -518,7 +529,24 @@ int main(int argc, char** argv) {
     if (command == "msgs") {
       const Target target = resolveTarget(arg(1), config, local);
       const uint64_t since = args.has("since") ? std::stoull(args.get("since")) : 0;
-      printMessages(target.device->readMessages(since));
+      const bool onlyFrom = args.has("only-from");
+      const bool onlyTo = args.has("only-to");
+      if (onlyFrom && onlyTo) throw Error("--only-from и --only-to нельзя указывать одновременно");
+      const std::string targetId = target.device->info().id;
+      std::vector<Message> messages = target.device->readMessages(since);
+      if (onlyFrom) {
+        std::vector<Message> filtered;
+        for (const auto& m : messages)
+          if (m.from == targetId) filtered.push_back(m);
+        messages = std::move(filtered);
+      }
+      if (onlyTo) {
+        std::vector<Message> filtered;
+        for (const auto& m : messages)
+          if (m.to == targetId) filtered.push_back(m);
+        messages = std::move(filtered);
+      }
+      printMessages(messages, local);
       return 0;
     }
 
