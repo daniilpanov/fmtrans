@@ -736,6 +736,48 @@ void testReconnectSameDeviceAfterRestart() {
   std::cout << "  reconnect same device after restart ok\n";
 }
 
+// Bug: после остановки обоих демонов и последовательного запуска,
+// связь должна восстановиться автоматически (обратный addPeer при старте).
+// Если запустить А первым, то при pruning'е Б удалится из пиров А (Б ещё не запущен).
+// Если затем запустить Б, то при pruning'е А останется в пирах Б (А уже запущен),
+// и Б должен зарегистрировать себя у А — иначе связь будет асимметричной.
+void testBidirectionalConnectAfterRestart() {
+  const uint16_t portA = freePort();
+  const uint16_t portB = freePort();
+  DaemonProc a("restart-bi-a", portA, "node-a");
+  DaemonProc b("restart-bi-b", portB, "node-b");
+
+  // Соединяем bidirectional.
+  CHECK(a.start() && b.start());
+  CHECK(a.waitReady() && b.waitReady());
+  a.client().addPeer(b.describe());
+  b.client().addPeer(a.describe());
+  CHECK(containsPeer(a.client().peers(), b.info().id));
+  CHECK(containsPeer(b.client().peers(), a.info().id));
+
+  // Останавливаем оба демона.
+  a.stop();
+  b.stop();
+  ::usleep(500000);
+
+  // Запускаем А первым — Б недоступен, поэтому Б будет удалён из пиров А при pruning'е.
+  CHECK(a.start());
+  CHECK(a.waitReady());
+
+  // Запускаем Б вторым — А доступен, поэтому А останется в пирах Б при pruning'е.
+  // При старте Б должен зарегистрировать себя у А (обратный addPeer).
+  CHECK(b.start());
+  CHECK(b.waitReady());
+
+  // Даём время на обратный addPeer при старте Б.
+  ::usleep(500000);
+
+  // У обоих должен быть другой в списке пиров (связь восстановлена двусторонне).
+  CHECK(containsPeer(a.client().peers(), b.info().id));
+  CHECK(containsPeer(b.client().peers(), a.info().id));
+  std::cout << "  bidirectional connect after restart ok\n";
+}
+
 void testMessagesBidirectional() {
   const uint16_t portA = freePort();
   const uint16_t portB = freePort();
@@ -1020,6 +1062,8 @@ int main() {
   testMessagesBidirectional();
   std::cout << "[TEST] testReconnectSameDeviceAfterRestart" << std::endl;
   testReconnectSameDeviceAfterRestart();
+  std::cout << "[TEST] testBidirectionalConnectAfterRestart" << std::endl;
+  testBidirectionalConnectAfterRestart();
   std::cout << "[TEST] testDeviceNameNotDefault" << std::endl;
   testDeviceNameNotDefault();
   std::cout << "[TEST] testMessagesFilteredByRecipient" << std::endl;
