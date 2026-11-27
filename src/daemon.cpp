@@ -228,6 +228,38 @@ bool Daemon::bind() {
     // If anything goes wrong during pruning, continue with whatever peers we have.
   }
 
+  // Восстанавливаем двустороннюю связь с пирами, которые остались после pruning'а.
+  // Если устройство Б было доступно при pruning'е (осталось в списке), регистрируем
+  // себя у Б, чтобы связь была двусторонней (иначе у Б есть А, а у А нет Б).
+  try {
+    auto remainingPeers = state_.peers();
+    const DeviceInfo& localInfo = state_.info();
+    const LocalConfig& localConfig = state_.config();
+    // Если локальный хост 0.0.0.0, используем 127.0.0.1 для обратного подключения,
+    // иначе удалённое устройство не сможет к нам подключиться.
+    std::string localHost = localConfig.host;
+    if (localHost == "0.0.0.0") localHost = "127.0.0.1";
+    for (const auto& peer : remainingPeers) {
+      try {
+        DeviceClient client(peer.host, peer.port, peer.password);
+        Peer localPeer;
+        localPeer.id = localInfo.id;
+        localPeer.name = localInfo.name;
+        localPeer.publicAccess = localInfo.publicAccess;
+        localPeer.host = localHost;
+        localPeer.port = localConfig.port;
+        localPeer.password = localConfig.password;
+        localPeer.source = "direct";
+        client.addPeer(localPeer);
+      } catch (const std::exception&) {
+        // Если не удалось зарегистрироваться — не критично, связь восстановится
+        // при следующем контакте или явном connect.
+      }
+    }
+  } catch (const std::exception&) {
+    // Если что-то пошло не так при восстановлении связи, продолжаем с теми пирами, что есть.
+  }
+
   std::cout << "listening on " << state_.config().host << ":"
             << state_.config().port << std::endl;
   return server_.bind();
