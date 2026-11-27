@@ -462,15 +462,46 @@ int main(int argc, char** argv) {
 
     if (command == "put") {
       const Target target = resolveTarget(arg(1), config, local);
-      const fs::path source = arg(2);
+      fs::path source = arg(2);
       if (!fs::exists(source)) throw Error("нет такого файла или папки: " + source.string());
-      putRecursive(*target.device, source, trimPath(arg(3)));
+      std::string remotePath = trimPath(arg(3));
+      // Если удалённый путь заканчивается на / или равен ./, считаем целевой директорией.
+      // Для файла добавляем его имя к целевому пути, чтобы сохранить исходное имя.
+      bool remoteIsDir = (arg(3) == "." || arg(3) == "./" ||
+                          (arg(3).size() > 0 && arg(3).back() == '/'));
+      if (remoteIsDir && !fs::is_directory(source)) {
+        remotePath += source.filename().string();
+      }
+      putRecursive(*target.device, source, remotePath);
       return 0;
     }
 
     if (command == "get") {
       const Target target = resolveTarget(arg(1), config, local);
-      getRecursive(*target.device, trimPath(arg(2)), arg(3));
+      std::string remotePath = trimPath(arg(2));
+      fs::path localPath = arg(3);
+      // Если локальный путь заканчивается на / или равен . или ./, считаем целевой директорией.
+      // . и ./ означают текущую папку запуска CLI.
+      bool localIsDir = (arg(3) == "." || arg(3) == "./" ||
+                         (arg(3).size() > 0 && arg(3).back() == '/'));
+      if (localIsDir) {
+        if (arg(3) == "." || arg(3) == "./") {
+          localPath = fs::current_path();
+        } else {
+          std::string p = arg(3);
+          if (!p.empty() && p.back() == '/') p.pop_back();
+          localPath = fs::path(p);
+        }
+        // Определяем, файл или папка на удалённой стороне, чтобы добавить имя к целевому пути.
+        try {
+          target.device->browse(remotePath);
+        } catch (const std::exception&) {
+          // Если brows() не сработал, это может быть файл
+        }
+        // Всегда добавляем имя удалённого файла/папки к целевому пути
+        localPath /= fs::path(remotePath).filename();
+      }
+      getRecursive(*target.device, remotePath, localPath);
       return 0;
     }
 
