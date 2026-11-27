@@ -79,6 +79,9 @@ struct Target {
 Target resolveTarget(const std::string& key, const LocalConfig& config,
                      DeviceClient& local) {
   if (key == "@local") {
+    if (config.host == "0.0.0.0") {
+      throw Error("нельзя использовать @local с хостом 0.0.0.0, укажите HOST:PORT");
+    }
     Target target;
     target.host = config.host;
     target.port = config.port;
@@ -90,6 +93,10 @@ Target resolveTarget(const std::string& key, const LocalConfig& config,
 
   for (const Peer& peer : local.peers()) {
     if (peer.id == key || peer.name == key || peer.address() == key) {
+      if (peer.host == "0.0.0.0") {
+        throw Error("устройство " + peer.name + " имеет адрес 0.0.0.0 (адрес привязки, не пира). "
+                    "Пересоздайте подключение: disconnect " + key + " и connect снова.");
+      }
       Target target;
       target.host = peer.host;
       target.port = peer.port;
@@ -105,6 +112,10 @@ Target resolveTarget(const std::string& key, const LocalConfig& config,
       Target target;
       target.host = key.substr(0, colon);
       target.port = static_cast<uint16_t>(std::stoul(key.substr(colon + 1)));
+      if (target.host == "0.0.0.0") {
+        throw Error("недопустимый адрес 0.0.0.0 (привязка ко всем интерфейсам), "
+                    "укажите конкретный IP (например, 127.0.0.1)");
+      }
       target.device = std::make_shared<DeviceClient>(target.host, target.port);
       return target;
     } catch (const std::exception&) {
